@@ -143,89 +143,26 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# HEALTH CHECK ENDPOINT
-# ---------------------------------------------------------------------------
-# This endpoint is hit:
-#   - Every 5 seconds by Docker's healthcheck (to know if the container is alive)
-#   - During CI deploys (to verify the new version is working before switching)
-#   - By Uptime Kuma monitoring (to track uptime and alert on outages)
-#
-# It checks that the database is reachable. If not, it returns HTTP 503
-# (Service Unavailable), which tells Docker the container is unhealthy.
-
-@app.get("/")
-async def root():
-    """Root endpoint — basic info about the service."""
-    return {
-        "service": config.APP_NAME,
-        "version": config.APP_VERSION,
-        "status": "running",
-    }
-
-
-@app.get("/health")
-async def health():
-    """
-    Health check endpoint. Returns 200 if the database is reachable,
-    503 if anything is wrong.
-
-    This is NOT for users — it's for automated monitoring systems.
-    """
-    if not await check_db_health():
-        raise HTTPException(
-            status_code=503,
-            detail={"status": "ERROR", "database": "unreachable"},
-        )
-    return {"status": "OK", "database": "reachable"}
-
-
-@app.get("/status")
-async def status():
-    """Detailed status endpoint with service info."""
-    db_healthy = await check_db_health()
-    return {
-        "service": config.APP_NAME,
-        "version": config.APP_VERSION,
-        "environment": config.ENVIRONMENT,
-        "database": "reachable" if db_healthy else "unreachable",
-        "gemini_model": config.GEMINI_MODEL,
-    }
-
-
-# ---------------------------------------------------------------------------
 # AUTH TEST ENDPOINT (temporary — helps verify JWT validation works)
 # ---------------------------------------------------------------------------
-# This endpoint requires a valid JWT. If the token is valid, it returns
-# the user's principal ID. If not, it returns 401 Unauthorized.
-#
-# We'll remove this once Phase 3 endpoints are live (they all use auth).
 
 @app.get("/api/v1/auth/me")
 async def auth_me(request: Request):
-    """
-    Test endpoint to verify JWT authentication is working.
-
-    Send a request with header:
-        Authorization: Bearer <your-jwt-token>
-
-    Returns:
-        {"user_id": "your-principal-id"} if the token is valid
-        {"detail": "..."} with 401 status if the token is invalid
-    """
+    """Test endpoint to verify JWT authentication is working."""
     user_id = get_current_user(request)
     return {"user_id": user_id}
 
 
 # ---------------------------------------------------------------------------
-# ROUTE REGISTRATION (Phase 3+)
+# ROUTE REGISTRATION
 # ---------------------------------------------------------------------------
-# As we build more endpoints, we'll import route modules here and register
-# them with the app. Example:
-#
-#   from routes.influencers import router as influencers_router
-#   from routes.chat_v1 import router as chat_router
-#   app.include_router(influencers_router)
-#   app.include_router(chat_router)
-#
-# This keeps main.py clean and each route module focused on one thing.
+# Each route module handles one area of the API. We import them and register
+# them with the app so FastAPI knows about all endpoints.
 # ---------------------------------------------------------------------------
+from routes.health import router as health_router
+from routes.influencers import router as influencers_router
+from routes.chat_v1 import router as chat_router
+
+app.include_router(health_router)
+app.include_router(influencers_router)
+app.include_router(chat_router)
