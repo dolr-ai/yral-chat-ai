@@ -18,13 +18,19 @@ sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT))
 
 
+class _FakePool:
+    """Fake asyncpg pool that does nothing."""
+    pass
+
+
 class _FakeDB:
     """In-memory fake that mimics the real database module's async API."""
     def __init__(self):
         self.healthy = True
+        self._pool = _FakePool()
 
     async def get_pool(self):
-        return self
+        return self._pool
 
     async def close_pool(self):
         pass
@@ -49,8 +55,10 @@ def fake_db(monkeypatch):
 def client(fake_db, monkeypatch):
     # Ensure no real Sentry DSN leaks into tests
     monkeypatch.delenv("SENTRY_DSN", raising=False)
-    # Force-reimport main so it picks up the fake database module
-    sys.modules.pop("main", None)
+    # Clear ALL cached app modules so they pick up the fake database
+    for mod_name in list(sys.modules):
+        if mod_name in ("main", "database") or mod_name.startswith("routes."):
+            sys.modules.pop(mod_name, None)
     import main
     from fastapi.testclient import TestClient
     return TestClient(main.app, raise_server_exceptions=False)
