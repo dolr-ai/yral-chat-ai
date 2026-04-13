@@ -188,3 +188,10 @@ try:
     logger.info("Chat routes loaded")
 except Exception as e:
     logger.error(f"Failed to load chat routes: {e}")
+
+try:
+    from routes.media import router as media_router
+    app.include_router(media_router)
+    logger.info("Media routes loaded")
+except Exception as e:
+    logger.error(f"Failed to load media routes: {e}")
