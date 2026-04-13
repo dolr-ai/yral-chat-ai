@@ -18,7 +18,7 @@ fastapi==0.115.12
 # Uvicorn — the web server that RUNS FastAPI. Listens on port 8000
 # and feeds incoming HTTP requests to FastAPI.
 # [standard] extra adds websocket support via websockets library.
-uvicorn[standard]==0.34.0
+uvicorn[standard]==0.44.0
 
 # --- DATABASE ---
 
