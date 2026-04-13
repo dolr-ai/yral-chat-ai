@@ -143,7 +143,7 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# AUTH TEST ENDPOINT (temporary — helps verify JWT validation works)
+# AUTH TEST + DEBUG ENDPOINTS
 # ---------------------------------------------------------------------------
 
 @app.get("/api/v1/auth/me")
@@ -153,6 +153,19 @@ async def auth_me(request: Request):
     return {"user_id": user_id}
 
 
+@app.get("/debug/routes")
+async def debug_routes():
+    """List all registered routes — helpful for debugging 404s."""
+    routes = []
+    for route in app.routes:
+        if hasattr(route, "methods"):
+            routes.append({
+                "path": route.path,
+                "methods": list(route.methods),
+            })
+    return {"routes": routes}
+
+
 # ---------------------------------------------------------------------------
 # ROUTE REGISTRATION
 # ---------------------------------------------------------------------------
@@ -160,9 +173,18 @@ async def auth_me(request: Request):
 # them with the app so FastAPI knows about all endpoints.
 # ---------------------------------------------------------------------------
 from routes.health import router as health_router
-from routes.influencers import router as influencers_router
-from routes.chat_v1 import router as chat_router
-
 app.include_router(health_router)
-app.include_router(influencers_router)
-app.include_router(chat_router)
+
+try:
+    from routes.influencers import router as influencers_router
+    app.include_router(influencers_router)
+    logger.info("Influencer routes loaded")
+except Exception as e:
+    logger.error(f"Failed to load influencer routes: {e}")
+
+try:
+    from routes.chat_v1 import router as chat_router
+    app.include_router(chat_router)
+    logger.info("Chat routes loaded")
+except Exception as e:
+    logger.error(f"Failed to load chat routes: {e}")
