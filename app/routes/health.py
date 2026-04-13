@@ -7,7 +7,7 @@
 # ---------------------------------------------------------------------------
 
 from fastapi import APIRouter, HTTPException
-from database import check_db_health
+import database
 import config
 
 router = APIRouter()
@@ -26,7 +26,7 @@ async def root():
 @router.get("/health")
 async def health():
     """Health check — returns 200 if DB reachable, 503 if not."""
-    if not await check_db_health():
+    if not await database.check_db_health():
         raise HTTPException(
             status_code=503,
             detail={"status": "ERROR", "database": "unreachable"},
@@ -37,7 +37,7 @@ async def health():
 @router.get("/status")
 async def status():
     """Detailed status with service info."""
-    db_healthy = await check_db_health()
+    db_healthy = await database.check_db_health()
     return {
         "service": config.APP_NAME,
         "version": config.APP_VERSION,
