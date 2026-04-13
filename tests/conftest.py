@@ -1,12 +1,10 @@
 """
-pytest fixtures for the template.
+pytest fixtures for the YRAL chat service.
 
-The app's `database` module opens a real psycopg2 connection pool at import
-time, so we inject a fake `database` module into sys.modules BEFORE importing
-app.main. This lets unit tests run with no Postgres available.
-
-For real DB integration tests, see tests/test_local_stack.sh — that one
-brings up the full Patroni cluster via local/setup.sh.
+The app's `database` module opens an async connection pool to PostgreSQL.
+Unit tests don't have a Postgres instance, so we inject a FAKE database
+module into sys.modules BEFORE importing app.main. This lets tests run
+without a real database.
 """
 import sys
 import types
@@ -21,16 +19,17 @@ sys.path.insert(0, str(ROOT))
 
 
 class _FakeDB:
-    """In-memory counter that mimics the real database module's API."""
+    """In-memory fake that mimics the real database module's async API."""
     def __init__(self):
-        self.value = 0
         self.healthy = True
 
-    def get_next_count(self):
-        self.value += 1
-        return self.value
+    async def get_pool(self):
+        return self
 
-    def check_db_health(self):
+    async def close_pool(self):
+        pass
+
+    async def check_db_health(self):
         return self.healthy
 
 
@@ -38,9 +37,7 @@ class _FakeDB:
 def fake_db(monkeypatch):
     fake = _FakeDB()
     mod = types.ModuleType("database")
-    # Automatically expose ALL public methods from _FakeDB on the mock module.
-    # This means adding a new function to database.py + _FakeDB "just works"
-    # without also having to add mod.new_function = fake.new_function here.
+    # Expose all public methods from _FakeDB on the mock module.
     for attr in dir(fake):
         if not attr.startswith("_"):
             setattr(mod, attr, getattr(fake, attr))
@@ -54,8 +51,6 @@ def client(fake_db, monkeypatch):
     monkeypatch.delenv("SENTRY_DSN", raising=False)
     # Force-reimport main so it picks up the fake database module
     sys.modules.pop("main", None)
-    import main  # noqa: WPS433
+    import main
     from fastapi.testclient import TestClient
-    # raise_server_exceptions=False so /sentry-test returns 500 instead of
-    # propagating the RuntimeError out of TestClient.
     return TestClient(main.app, raise_server_exceptions=False)
