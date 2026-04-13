@@ -31,7 +31,7 @@ import sentry_sdk
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import get_pool, close_pool, check_db_health
+import database
 from auth import get_current_user
 from infra import init_sentry
 import config
@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI):
     # Create the database connection pool.
     # This opens 2-10 connections to PostgreSQL via HAProxy.
     try:
-        await get_pool()
+        await database.get_pool()
         logger.info("Database pool initialized successfully")
     except Exception as e:
         # If we can't connect to the database at startup, log the error
@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
 
     # --- SHUTDOWN ---
     logger.info("Shutting down...")
-    await close_pool()
+    await database.close_pool()
     logger.info("Shutdown complete")
 
 
