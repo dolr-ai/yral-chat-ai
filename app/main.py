@@ -195,3 +195,17 @@ try:
     logger.info("Media routes loaded")
 except Exception as e:
     logger.error(f"Failed to load media routes: {e}")
+
+try:
+    from routes.websocket import router as ws_router
+    app.include_router(ws_router)
+    logger.info("WebSocket routes loaded")
+except Exception as e:
+    logger.error(f"Failed to load WebSocket routes: {e}")
+
+try:
+    from routes.chat_v2 import router as chat_v2_router
+    app.include_router(chat_v2_router)
+    logger.info("Chat V2 routes loaded")
+except Exception as e:
+    logger.error(f"Failed to load chat V2 routes: {e}")

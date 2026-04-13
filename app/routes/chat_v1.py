@@ -39,7 +39,7 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from database import get_pool
 from auth import get_current_user
 from repositories import influencer_repo, conversation_repo, message_repo
-from services import ai_client, push_notifications
+from services import ai_client, push_notifications, websocket_manager
 from models import (
     CreateConversationRequest, SendMessageRequest,
     SendMessageResponse, ChatMessage, ConversationResponse,
@@ -459,7 +459,17 @@ async def send_message(
         system_instructions += f"\n\n**MEMORIES:**\n{memories_text}"
 
     # ---------------------------------------------------------------
-    # Step 7-8: Call AI model (Gemini or OpenRouter)
+    # Step 7: Broadcast typing indicator (START)
+    # ---------------------------------------------------------------
+    await websocket_manager.broadcast_typing_status(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        influencer_id=influencer_id,
+        is_typing=True,
+    )
+
+    # ---------------------------------------------------------------
+    # Step 8: Call AI model (Gemini or OpenRouter)
     # ---------------------------------------------------------------
     is_nsfw = inf.get("is_nsfw", False)
     response_text, token_count, is_fallback = await ai_client.generate_response(
@@ -468,6 +478,16 @@ async def send_message(
         user_message=content or "",
         is_nsfw=is_nsfw,
         media_urls=body.media_urls,
+    )
+
+    # ---------------------------------------------------------------
+    # Step 8b: Broadcast typing indicator (STOP)
+    # ---------------------------------------------------------------
+    await websocket_manager.broadcast_typing_status(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        influencer_id=influencer_id,
+        is_typing=False,
     )
 
     # ---------------------------------------------------------------
@@ -490,6 +510,21 @@ async def send_message(
     asyncio.create_task(_background_memory_extraction(
         pool, conversation_id, content or "", response_text,
         memories, is_nsfw,
+    ))
+
+    # Broadcast new_message event via WebSocket
+    unread_count = await message_repo.count_unread(pool, conversation_id)
+    asyncio.create_task(websocket_manager.broadcast_new_message(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        message=_format_message(assistant_msg),
+        influencer={
+            "id": influencer_id,
+            "display_name": inf.get("display_name", ""),
+            "avatar_url": inf.get("avatar_url"),
+            "is_online": True,
+        },
+        unread_count=unread_count,
     ))
 
     asyncio.create_task(push_notifications.send_new_message_notification(
@@ -557,6 +592,15 @@ async def mark_as_read(conversation_id: str, request: Request):
 
     await message_repo.mark_as_read(pool, conversation_id)
     unread = await message_repo.count_unread(pool, conversation_id)
+
+    # Broadcast read receipt via WebSocket
+    from datetime import datetime, timezone
+    read_at = datetime.now(timezone.utc).isoformat()
+    asyncio.create_task(websocket_manager.broadcast_conversation_read(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        read_at=read_at,
+    ))
 
     return {"unread_count": unread}
 
