@@ -135,18 +135,24 @@ async def list_influencers(
     Cached for 5 minutes (Cache-Control header tells the mobile app and CDN
     to reuse the response instead of hitting our server on every scroll).
     """
-    pool = await get_pool()
-    influencers = await influencer_repo.list_all(pool, limit, offset)
-    total = await influencer_repo.count_all(pool)
+    try:
+        pool = await get_pool()
+        influencers = await influencer_repo.list_all(pool, limit, offset)
+        total = await influencer_repo.count_all(pool)
 
-    response = JSONResponse(content={
-        "influencers": [_format_influencer_response(i) for i in influencers],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    })
-    response.headers["Cache-Control"] = "public, max-age=300"
-    return response
+        response = JSONResponse(content={
+            "influencers": [_format_influencer_response(i) for i in influencers],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        })
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return response
+    except Exception as e:
+        logger.error(f"list_influencers failed: {type(e).__name__}: {e}")
+        import sentry_sdk
+        sentry_sdk.capture_exception(e)
+        raise HTTPException(status_code=500, detail=f"Internal error: {type(e).__name__}: {e}")
 
 
 @router.get("/influencers/trending")
