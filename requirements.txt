@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# requirements.txt — Python packages (libraries) that the app needs to run.
+# requirements.txt — Python packages the chat service needs to run.
 #
 # "pip install -r requirements.txt" reads this file and installs everything.
 # Each line is: package_name==exact_version
@@ -9,19 +9,69 @@
 # every developer and every server runs the EXACT same code.
 # ---------------------------------------------------------------------------
 
+# --- WEB FRAMEWORK ---
+
 # FastAPI — the web framework. Handles HTTP requests, routes URLs to
 # Python functions, converts Python dicts to JSON responses.
 fastapi==0.115.12
 
 # Uvicorn — the web server that RUNS FastAPI. Listens on port 8000
 # and feeds incoming HTTP requests to FastAPI.
-uvicorn==0.34.0
+# [standard] extra adds websocket support via websockets library.
+uvicorn[standard]==0.34.0
+
+# --- DATABASE ---
+
+# asyncpg — ASYNC PostgreSQL adapter for Python. Unlike psycopg2 (which
+# blocks the thread while waiting for DB), asyncpg lets other requests
+# proceed while one request waits for the database. Essential for
+# WebSockets and high-concurrency chat workloads.
+asyncpg==0.30.0
+
+# --- AUTHENTICATION ---
+
+# PyJWT — decodes JWT (JSON Web Tokens) from the mobile app.
+# The mobile app sends a JWT in the Authorization header.
+# We decode it to get the user's principal ID (their identity).
+# [crypto] extra adds support for RS256 algorithm.
+pyjwt[crypto]==2.10.1
+
+# --- AI / LLM ---
+
+# OpenAI Python SDK — used to talk to Google's Gemini API.
+# Gemini supports the OpenAI-compatible API format, so we use
+# this SDK with a custom base_url pointing to Gemini's endpoint.
+# Also used for OpenRouter (NSFW content routing).
+openai==1.82.0
+
+# --- STORAGE ---
+
+# boto3 — AWS S3 client. Used to upload/download media files
+# (images, audio) to Hetzner Object Storage (S3-compatible).
+boto3==1.38.6
+
+# --- HTTP CLIENT ---
+
+# httpx — async HTTP client. Used for:
+# - Push notifications to the metadata server
+# - Audio transcription calls to Gemini's native API
+# - Any other external HTTP calls
+httpx==0.28.1
+
+# --- FILE UPLOADS ---
+
+# python-multipart — required by FastAPI to handle file uploads
+# (multipart/form-data). Without this, file upload endpoints crash.
+python-multipart==0.0.20
+
+# --- ERROR TRACKING ---
 
 # Sentry SDK — error tracking. Catches crashes and sends them to
 # apm.yral.com. The [fastapi] extra adds FastAPI-specific integration.
 sentry-sdk[fastapi]==2.22.0
 
-# psycopg2 — the Python adapter for PostgreSQL. Lets Python connect
-# to the database, run SQL queries, and get results back.
-# "binary" = pre-compiled, no build tools needed.
-psycopg2-binary==2.9.10
+# --- UTILITIES ---
+
+# python-dateutil — date/time parsing utilities. Handles ISO 8601
+# datetime strings from the database and API responses.
+python-dateutil==2.9.0.post0

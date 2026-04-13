@@ -1,116 +1,231 @@
 # ---------------------------------------------------------------------------
-# main.py — the entry point of the web application.
+# main.py — The entry point of the YRAL chat service.
 #
 # This is the FIRST file that runs when the app starts. The command
 # "uvicorn main:app" tells the web server: "load the file main.py and
 # find the variable called 'app' in it."
 #
-# This file defines TWO web endpoints (URLs the app responds to):
-#   GET /        → increments the counter and returns "Hello World Person N"
-#   GET /health  → checks if the database is reachable (used by monitoring)
+# WHAT THIS FILE DOES:
+#   1. Sets up the FastAPI web application
+#   2. Configures CORS (which websites/apps can call our API)
+#   3. Initializes the database connection pool on startup
+#   4. Closes the database connection pool on shutdown
+#   5. Defines the health check endpoint (used by Docker, CI, monitoring)
+#   6. Will include all route modules as the service grows (Phase 3+)
+#
+# ARCHITECTURE:
+#   Browser/Mobile App
+#     -> Caddy (HTTPS reverse proxy)
+#       -> This FastAPI app (port 8000)
+#         -> PostgreSQL (via HAProxy -> Patroni leader)
+#         -> Gemini API (for AI chat responses)
+#         -> S3 (for media storage)
+#
+# PORTED FROM: yral-ai-chat/src/main.rs
 # ---------------------------------------------------------------------------
 
-# "import" means "load this library so I can use its features."
-# sentry_sdk is an error-tracking library that sends crash reports to apm.yral.com
+import logging
+from contextlib import asynccontextmanager
+
 import sentry_sdk
+from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
 
-# FastAPI is the web framework — it handles all the plumbing of a web server
-# (parsing HTTP requests, routing URLs to functions, converting Python dicts to JSON).
-# HTTPException is a way to return error responses (like "503 Service Unavailable").
-from fastapi import FastAPI, HTTPException
-
-# These are functions from our own database.py file (same folder).
-# get_next_count: adds 1 to the counter in PostgreSQL, returns the new number.
-# check_db_health: checks if the database is reachable and the counter table exists.
-from database import get_next_count, check_db_health
-
-# init_sentry is a helper from our infra/ package that sets up error tracking.
-# If the SENTRY_DSN environment variable is not set, this does nothing (safe for local dev).
+from database import get_pool, close_pool, check_db_health
+from auth import get_current_user
 from infra import init_sentry
+import config
 
-# Call init_sentry() at startup. If Sentry is configured, all future errors
-# will be automatically reported to apm.yral.com. If not configured, this
-# line does nothing — it's a "no-op" (no operation).
+# ---------------------------------------------------------------------------
+# LOGGING SETUP
+# ---------------------------------------------------------------------------
+# Configure Python's logging to show timestamps, log level, and messages.
+# This output appears in `docker logs <container>` and in CI deploy logs.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# SENTRY ERROR TRACKING
+# ---------------------------------------------------------------------------
+# Sentry catches all unhandled exceptions and sends them to apm.yral.com.
+# If SENTRY_DSN is not set, this does nothing (safe for local dev).
 init_sentry()
 
-# Create the web application. This is the "app" variable that uvicorn looks for.
-# FastAPI handles: receiving HTTP requests, routing them to the right function,
-# converting Python dictionaries to JSON responses, and sending them back.
-app = FastAPI()
 
-
-# This is a "decorator" — the @app.get("/") line means:
-# "When someone sends a GET request to the URL /, call the function below."
-# A GET request is what happens when you type a URL in your browser's address bar.
-@app.get("/")
-def root():
+# ---------------------------------------------------------------------------
+# APP LIFESPAN (startup and shutdown events)
+# ---------------------------------------------------------------------------
+# The @asynccontextmanager decorator creates a "lifespan" function that runs:
+#   - BEFORE the app starts serving requests (everything before "yield")
+#   - AFTER the app stops serving requests (everything after "yield")
+#
+# We use this to:
+#   - Create the database connection pool at startup
+#   - Close the database connection pool at shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """
-    The main endpoint. Every visit increments a counter in the database
-    and returns the visitor's number.
+    App startup and shutdown logic.
 
-    Example responses:
-      First visitor:  {"message": "Hello World Person 1"}
-      Second visitor: {"message": "Hello World Person 2"}
-      ...and so on forever.
+    STARTUP (before yield):
+    - Creates the database connection pool
+    - Logs that the service is ready
+
+    SHUTDOWN (after yield):
+    - Closes all database connections cleanly
+    - Logs that the service is shutting down
     """
-    # "try" means "attempt the code below, and if anything goes wrong,
-    # jump to the 'except' block instead of crashing."
+    # --- STARTUP ---
+    logger.info(f"Starting {config.APP_NAME} v{config.APP_VERSION}")
+    logger.info(f"Environment: {config.ENVIRONMENT}")
+
+    # Create the database connection pool.
+    # This opens 2-10 connections to PostgreSQL via HAProxy.
     try:
-        # Call our database function to increment the counter.
-        # This runs: UPDATE counter SET value = value + 1 RETURNING value;
-        # It returns an integer (e.g., 336).
-        count = get_next_count()
+        await get_pool()
+        logger.info("Database pool initialized successfully")
+    except Exception as e:
+        # If we can't connect to the database at startup, log the error
+        # but DON'T crash. The health check will report unhealthy, and
+        # the pool will retry on the first real request.
+        logger.error(f"Failed to initialize database pool at startup: {e}")
 
-        # Return a Python dictionary. FastAPI automatically converts this
-        # to a JSON response that the browser receives.
-        # The f"..." is a "format string" — {count} gets replaced with
-        # the actual number (e.g., "Hello World Person 336").
-        return {"message": f"Hello World Person {count}"}
+    # "yield" means: "startup is done, start serving requests."
+    # Everything after yield runs when the app is shutting down.
+    yield
 
-    except Exception as exc:
-        # If get_next_count() failed (database down, network error, etc.),
-        # we land here. "exc" is the error object with details about what broke.
-
-        # Send the error to Sentry FIRST so we have a detailed stack trace
-        # in our error dashboard. Without this line, Sentry would only see
-        # "HTTPException 503" — not the underlying database error.
-        sentry_sdk.capture_exception(exc)
-
-        # Return HTTP 503 (Service Unavailable) to the browser.
-        # The user sees: {"detail": "Database unavailable"}
-        # "from exc" chains the original error so logs show the root cause.
-        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    # --- SHUTDOWN ---
+    logger.info("Shutting down...")
+    await close_pool()
+    logger.info("Shutdown complete")
 
 
-# Another decorator: "when someone sends GET /health, call this function."
-# This endpoint is hit every 5 seconds by Docker's healthcheck, by the CI
-# deploy verification step, and (optionally) by Uptime Kuma monitoring.
+# ---------------------------------------------------------------------------
+# CREATE THE FASTAPI APP
+# ---------------------------------------------------------------------------
+# This is the "app" variable that uvicorn looks for.
+# lifespan=lifespan tells FastAPI to run our startup/shutdown logic.
+app = FastAPI(
+    title=config.APP_NAME,
+    version=config.APP_VERSION,
+    lifespan=lifespan,
+)
+
+
+# ---------------------------------------------------------------------------
+# CORS MIDDLEWARE
+# ---------------------------------------------------------------------------
+# CORS (Cross-Origin Resource Sharing) controls which websites/apps can
+# call our API. The mobile app needs this to make HTTP requests.
+# "*" means "allow everyone" — appropriate for a public API.
+#
+# WHY ALL THESE OPTIONS?
+#   allow_origins: which domains can call us
+#   allow_credentials: whether cookies/auth headers are allowed
+#   allow_methods: which HTTP methods are allowed (GET, POST, etc.)
+#   allow_headers: which request headers are allowed (Authorization, etc.)
+if config.CORS_ORIGINS == "*":
+    origins = ["*"]
+else:
+    origins = [o.strip() for o in config.CORS_ORIGINS.split(",")]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------------------------
+# HEALTH CHECK ENDPOINT
+# ---------------------------------------------------------------------------
+# This endpoint is hit:
+#   - Every 5 seconds by Docker's healthcheck (to know if the container is alive)
+#   - During CI deploys (to verify the new version is working before switching)
+#   - By Uptime Kuma monitoring (to track uptime and alert on outages)
+#
+# It checks that the database is reachable. If not, it returns HTTP 503
+# (Service Unavailable), which tells Docker the container is unhealthy.
+
+@app.get("/")
+async def root():
+    """Root endpoint — basic info about the service."""
+    return {
+        "service": config.APP_NAME,
+        "version": config.APP_VERSION,
+        "status": "running",
+    }
+
+
 @app.get("/health")
-def health():
+async def health():
     """
-    Health check endpoint. Returns 200 if the database is reachable and
-    the counter table exists. Returns 503 if anything is wrong.
+    Health check endpoint. Returns 200 if the database is reachable,
+    503 if anything is wrong.
 
     This is NOT for users — it's for automated monitoring systems.
     """
-    # check_db_health() queries: SELECT 1 FROM counter LIMIT 1
-    # It returns True if the query succeeds, False if it fails.
-    # "not" flips the boolean: "if NOT healthy" → enter the if-block.
-    if not check_db_health():
-        # Database is unreachable or counter table doesn't exist.
-        # Return HTTP 503 with a descriptive JSON body.
+    if not await check_db_health():
         raise HTTPException(
             status_code=503,
             detail={"status": "ERROR", "database": "unreachable"},
         )
-
-    # Database is healthy. Return HTTP 200 with a success message.
     return {"status": "OK", "database": "reachable"}
 
 
-# NOTE: this template intentionally does NOT ship a public /sentry-test
-# endpoint. Earlier versions had one to manually fire a Sentry event after
-# deploy, but it was an unauthenticated DOS amplifier (anyone could trigger
-# unlimited Sentry events by hitting the URL in a loop). To verify Sentry
-# is wired up after a deploy, just trigger a real error path (e.g., stop
-# Postgres briefly) and watch the apm.yral.com project.
+@app.get("/status")
+async def status():
+    """Detailed status endpoint with service info."""
+    db_healthy = await check_db_health()
+    return {
+        "service": config.APP_NAME,
+        "version": config.APP_VERSION,
+        "environment": config.ENVIRONMENT,
+        "database": "reachable" if db_healthy else "unreachable",
+        "gemini_model": config.GEMINI_MODEL,
+    }
+
+
+# ---------------------------------------------------------------------------
+# AUTH TEST ENDPOINT (temporary — helps verify JWT validation works)
+# ---------------------------------------------------------------------------
+# This endpoint requires a valid JWT. If the token is valid, it returns
+# the user's principal ID. If not, it returns 401 Unauthorized.
+#
+# We'll remove this once Phase 3 endpoints are live (they all use auth).
+
+@app.get("/api/v1/auth/me")
+async def auth_me(request: Request):
+    """
+    Test endpoint to verify JWT authentication is working.
+
+    Send a request with header:
+        Authorization: Bearer <your-jwt-token>
+
+    Returns:
+        {"user_id": "your-principal-id"} if the token is valid
+        {"detail": "..."} with 401 status if the token is invalid
+    """
+    user_id = get_current_user(request)
+    return {"user_id": user_id}
+
+
+# ---------------------------------------------------------------------------
+# ROUTE REGISTRATION (Phase 3+)
+# ---------------------------------------------------------------------------
+# As we build more endpoints, we'll import route modules here and register
+# them with the app. Example:
+#
+#   from routes.influencers import router as influencers_router
+#   from routes.chat_v1 import router as chat_router
+#   app.include_router(influencers_router)
+#   app.include_router(chat_router)
+#
+# This keeps main.py clean and each route module focused on one thing.
+# ---------------------------------------------------------------------------
