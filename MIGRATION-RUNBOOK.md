@@ -5,9 +5,27 @@ Rust chat service (`chat.yral.com`) to the new Python chat service
 (`chat-ai.rishi.yral.com`).
 
 **Status:** Ready to execute
-**Estimated time:** 2-4 hours (including monitoring)
-**Risk level:** Medium (DNS switch is reversible)
+**Strategy:** Two-run migration (migrate → test for days → migrate again → go live)
+**Risk level:** Low (old service stays live during testing, DNS switch is reversible)
 **Rollback plan:** Switch DNS back to old service IPs
+
+## Migration Strategy: Two Runs
+
+```
+DAY 1:  Run migration (first run)    → all data copied to new service
+        Old service stays live        → production users unaffected
+        Test new service at chat-ai.rishi.yral.com for as long as you need
+
+DAY X:  Run migration AGAIN          → catches up new data from the gap period
+        (second run)                  → takes seconds, not minutes
+        Switch DNS immediately after  → new service goes live
+        Old service stays as fallback → for 1 week
+```
+
+The script uses `INSERT ... ON CONFLICT (id) DO NOTHING`, so:
+- First run: inserts all rows (new DB is empty)
+- Second run: skips existing rows, only inserts rows created since the first run
+- Safe to run unlimited times — never duplicates, never deletes
 
 ---
 
