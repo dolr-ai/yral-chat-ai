@@ -209,3 +209,17 @@ try:
     logger.info("Chat V2 routes loaded")
 except Exception as e:
     logger.error(f"Failed to load chat V2 routes: {e}")
+
+try:
+    from routes.human_chat import router as human_chat_router
+    app.include_router(human_chat_router)
+    logger.info("Human chat routes loaded")
+except Exception as e:
+    logger.error(f"Failed to load human chat routes: {e}")
+
+try:
+    from routes.chat_v3 import router as chat_v3_router
+    app.include_router(chat_v3_router)
+    logger.info("Chat V3 (unified inbox) routes loaded")
+except Exception as e:
+    logger.error(f"Failed to load chat V3 routes: {e}")
