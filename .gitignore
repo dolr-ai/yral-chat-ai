@@ -14,6 +14,12 @@
 # This folder contains the DATABASE_URL file with the Postgres password.
 secrets/
 
+# Migration data dumps — never commit database exports.
+# These CSVs contain user PII (message content, user IDs, etc.).
+.migration-data/
+*.csv
+*.sql.gz
+
 # Bootstrap secrets — written locally by scripts/new-service.sh on first run.
 # Contains the generated POSTGRES_PASSWORD and REPLICATION_PASSWORD.
 # This MUST stay gitignored permanently. We learned the hard way: if a
