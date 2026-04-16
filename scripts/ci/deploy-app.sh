@@ -142,10 +142,26 @@ fi
 # ----------------------------------------------------------------------
 # "docker compose pull" downloads the new image from GHCR.
 # SENTRY_DSN is passed as an env var because docker-compose.yml references it.
-SENTRY_DSN="${SENTRY_DSN}" docker compose pull
+# Export all env vars so docker-compose.yml's ${VAR:-} interpolations work.
+# SENTRY_DSN and all chat service API secrets are passed from the CI workflow.
+export SENTRY_DSN="${SENTRY_DSN:-}"
+export GEMINI_API_KEY="${GEMINI_API_KEY:-}"
+export OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
+export REPLICATE_API_TOKEN="${REPLICATE_API_TOKEN:-}"
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
+export AWS_S3_BUCKET="${AWS_S3_BUCKET:-}"
+export AWS_REGION="${AWS_REGION:-}"
+export S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-}"
+export S3_PUBLIC_URL_BASE="${S3_PUBLIC_URL_BASE:-}"
+export YRAL_METADATA_NOTIFICATION_API_KEY="${YRAL_METADATA_NOTIFICATION_API_KEY:-}"
+export ADMIN_KEY_TO_DELETE_INFLUENCER="${ADMIN_KEY_TO_DELETE_INFLUENCER:-}"
+export CORS_ORIGINS="${CORS_ORIGINS:-*}"
+
+docker compose pull
 # "docker compose up -d" starts the container in detached mode (background).
 # If a container is already running, this replaces it with the new image.
-SENTRY_DSN="${SENTRY_DSN}" docker compose up -d
+docker compose up -d
 
 # ----------------------------------------------------------------------
 # Step 5: Wait for the health check to pass (up to 90 seconds)
@@ -285,9 +301,7 @@ fi
 # We override IMAGE_TAG with the rollback tag so docker-compose.yml pulls
 # the old image instead of the broken new one.
 echo "==> Re-deploying ${ROLLBACK_TAG}"
-IMAGE_TAG="${ROLLBACK_TAG}" \
-SENTRY_DSN="${SENTRY_DSN}" \
-docker compose up -d
+IMAGE_TAG="${ROLLBACK_TAG}" docker compose up -d
 
 # Wait for the rolled-back container to become healthy (up to 60 seconds).
 # It SHOULD be healthy since it was working before, but we verify anyway.

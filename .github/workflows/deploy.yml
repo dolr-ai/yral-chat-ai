@@ -460,7 +460,7 @@ jobs:
           # Give the deploy up to 5 minutes (health checks + potential rollback)
           command_timeout: 5m
           # Pass these environment variables to the remote script
-          envs: IMAGE_TAG,DATABASE_URL,SENTRY_DSN,GITHUB_TOKEN,GITHUB_ACTOR,APP_DIR
+          envs: IMAGE_TAG,DATABASE_URL,SENTRY_DSN,GITHUB_TOKEN,GITHUB_ACTOR,APP_DIR,GEMINI_API_KEY,OPENROUTER_API_KEY,REPLICATE_API_TOKEN,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_S3_BUCKET,AWS_REGION,S3_ENDPOINT_URL,S3_PUBLIC_URL_BASE,YRAL_METADATA_NOTIFICATION_API_KEY,ADMIN_KEY_TO_DELETE_INFLUENCER,CORS_ORIGINS
           script: |
             # Make the deploy script executable
             chmod +x ${APP_DIR}/scripts/ci/deploy-app.sh
@@ -478,6 +478,19 @@ jobs:
           GITHUB_ACTOR: ${{ github.actor }}
           # Path where app files were copied to on the server
           APP_DIR: /home/deploy/${{ env.PROJECT_REPO }}
+          # --- Chat service API secrets ---
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_PUBLIC_URL_BASE: ${{ secrets.S3_PUBLIC_URL_BASE }}
+          YRAL_METADATA_NOTIFICATION_API_KEY: ${{ secrets.YRAL_METADATA_NOTIFICATION_API_KEY }}
+          ADMIN_KEY_TO_DELETE_INFLUENCER: ${{ secrets.ADMIN_KEY_TO_DELETE_INFLUENCER }}
+          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
 
       # ---------- SERVER 2 (only runs if Server 1 FULLY succeeded) ----------
 
@@ -501,7 +514,7 @@ jobs:
           username: ${{ env.DEPLOY_USER }}
           key: ${{ secrets.HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY }}
           command_timeout: 5m
-          envs: IMAGE_TAG,DATABASE_URL,SENTRY_DSN,GITHUB_TOKEN,GITHUB_ACTOR,APP_DIR
+          envs: IMAGE_TAG,DATABASE_URL,SENTRY_DSN,GITHUB_TOKEN,GITHUB_ACTOR,APP_DIR,GEMINI_API_KEY,OPENROUTER_API_KEY,REPLICATE_API_TOKEN,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_S3_BUCKET,AWS_REGION,S3_ENDPOINT_URL,S3_PUBLIC_URL_BASE,YRAL_METADATA_NOTIFICATION_API_KEY,ADMIN_KEY_TO_DELETE_INFLUENCER,CORS_ORIGINS
           script: |
             chmod +x ${APP_DIR}/scripts/ci/deploy-app.sh
             ${APP_DIR}/scripts/ci/deploy-app.sh
@@ -512,4 +525,17 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
+          # --- Chat service API secrets (same as Server 1) ---
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_PUBLIC_URL_BASE: ${{ secrets.S3_PUBLIC_URL_BASE }}
+          YRAL_METADATA_NOTIFICATION_API_KEY: ${{ secrets.YRAL_METADATA_NOTIFICATION_API_KEY }}
+          ADMIN_KEY_TO_DELETE_INFLUENCER: ${{ secrets.ADMIN_KEY_TO_DELETE_INFLUENCER }}
+          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
           APP_DIR: /home/deploy/${{ env.PROJECT_REPO }}
