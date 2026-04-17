@@ -252,8 +252,12 @@ jobs:
 
       # Build the Patroni image (only if this service has a database).
       # This image contains PostgreSQL + Patroni + our bootstrap scripts.
+      # continue-on-error: true because the Patroni image rarely changes
+      # (only when patroni/ or migrations/ files change). If the build fails
+      # due to transient apt-get issues, the existing :latest image is used.
       - name: Build and push Patroni image
         if: needs.config.outputs.with_database == 'true'
+        continue-on-error: true
         uses: docker/build-push-action@v6
         with:
           # Context is the repo ROOT (not ./patroni) because the Dockerfile
