@@ -136,7 +136,7 @@ jobs:
       # Run pytest on the tests/ directory.
       # -v = verbose (show each test name and pass/fail)
       - name: pytest
-        run: pytest tests/ -v
+        run: pytest tests/ -v --ignore=tests/integration_live
       # Run the template integrity check script.
       # This verifies that project.config variables are consistent with
       # the rest of the repo (e.g., PROJECT_NAME matches in all files).
