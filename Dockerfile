@@ -24,7 +24,7 @@
 # START FROM an official Python 3.12 image.
 # "slim" means a minimal version of Debian Linux with Python pre-installed.
 # It's ~150MB (vs ~900MB for the full image). We don't need build tools.
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # LABELS are metadata attached to the image. They don't affect how the
 # container runs — they're for humans and tools to identify the image.
