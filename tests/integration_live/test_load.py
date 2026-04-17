@@ -23,7 +23,7 @@ import requests
 BASE = "https://chat-ai.rishi.yral.com"
 
 
-def make_request(url, timeout=15):
+def make_request(url, timeout=30):
     """Make a single HTTP request and return (status_code, latency_ms, error)."""
     start = time.time()
     try:

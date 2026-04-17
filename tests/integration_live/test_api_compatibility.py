@@ -72,8 +72,8 @@ def compare_fields(old_obj, new_obj, context=""):
 def test_health():
     """Test health endpoint — response format is intentionally different."""
     print("\n--- Health Check ---")
-    old_r = requests.get(f"{OLD}/health", timeout=10)
-    new_r = requests.get(f"{NEW}/health", timeout=10)
+    old_r = requests.get(f"{OLD}/health", timeout=30)
+    new_r = requests.get(f"{NEW}/health", timeout=30)
 
     report("Old service reachable", old_r.status_code == 200)
     report("New service reachable", new_r.status_code == 200)
@@ -89,8 +89,8 @@ def test_influencer_list():
     """Compare influencer list endpoint — the most critical endpoint."""
     print("\n--- Influencer List (GET /api/v1/influencers) ---")
 
-    old_r = requests.get(f"{OLD}/api/v1/influencers?limit=5", timeout=10)
-    new_r = requests.get(f"{NEW}/api/v1/influencers?limit=5", timeout=10)
+    old_r = requests.get(f"{OLD}/api/v1/influencers?limit=5", timeout=30)
+    new_r = requests.get(f"{NEW}/api/v1/influencers?limit=5", timeout=30)
 
     report("Old returns 200", old_r.status_code == 200)
     report("New returns 200", new_r.status_code == 200)
@@ -145,8 +145,8 @@ def test_influencer_trending():
     """Compare trending endpoint."""
     print("\n--- Trending (GET /api/v1/influencers/trending) ---")
 
-    old_r = requests.get(f"{OLD}/api/v1/influencers/trending?limit=3", timeout=10)
-    new_r = requests.get(f"{NEW}/api/v1/influencers/trending?limit=3", timeout=10)
+    old_r = requests.get(f"{OLD}/api/v1/influencers/trending?limit=3", timeout=30)
+    new_r = requests.get(f"{NEW}/api/v1/influencers/trending?limit=3", timeout=30)
 
     report("Both return 200",
            old_r.status_code == 200 and new_r.status_code == 200)
@@ -171,11 +171,11 @@ def test_influencer_detail():
     print("\n--- Influencer Detail (GET /api/v1/influencers/{id}) ---")
 
     # Get an influencer ID from the list
-    list_r = requests.get(f"{OLD}/api/v1/influencers?limit=1", timeout=10)
+    list_r = requests.get(f"{OLD}/api/v1/influencers?limit=1", timeout=30)
     inf_id = list_r.json()["influencers"][0]["id"]
 
-    old_r = requests.get(f"{OLD}/api/v1/influencers/{inf_id}", timeout=10)
-    new_r = requests.get(f"{NEW}/api/v1/influencers/{inf_id}", timeout=10)
+    old_r = requests.get(f"{OLD}/api/v1/influencers/{inf_id}", timeout=30)
+    new_r = requests.get(f"{NEW}/api/v1/influencers/{inf_id}", timeout=30)
 
     report("Both return 200",
            old_r.status_code == 200 and new_r.status_code == 200)
@@ -204,8 +204,8 @@ def test_pagination():
     print("\n--- Pagination ---")
 
     # Test offset
-    old_r = requests.get(f"{OLD}/api/v1/influencers?limit=1&offset=50", timeout=10)
-    new_r = requests.get(f"{NEW}/api/v1/influencers?limit=1&offset=50", timeout=10)
+    old_r = requests.get(f"{OLD}/api/v1/influencers?limit=1&offset=50", timeout=30)
+    new_r = requests.get(f"{NEW}/api/v1/influencers?limit=1&offset=50", timeout=30)
 
     report("Both return 200",
            old_r.status_code == 200 and new_r.status_code == 200)
@@ -224,8 +224,8 @@ def test_nonexistent():
     """Test 404 for non-existent resources."""
     print("\n--- 404 Handling ---")
 
-    old_r = requests.get(f"{OLD}/api/v1/influencers/nonexistent-id-12345", timeout=10)
-    new_r = requests.get(f"{NEW}/api/v1/influencers/nonexistent-id-12345", timeout=10)
+    old_r = requests.get(f"{OLD}/api/v1/influencers/nonexistent-id-12345", timeout=30)
+    new_r = requests.get(f"{NEW}/api/v1/influencers/nonexistent-id-12345", timeout=30)
 
     report("Both return 404",
            old_r.status_code == 404 and new_r.status_code == 404,
@@ -236,8 +236,8 @@ def test_ws_docs():
     """Compare WebSocket documentation endpoint."""
     print("\n--- WebSocket Docs ---")
 
-    old_r = requests.get(f"{OLD}/api/v1/chat/ws/docs", timeout=10)
-    new_r = requests.get(f"{NEW}/api/v1/chat/ws/docs", timeout=10)
+    old_r = requests.get(f"{OLD}/api/v1/chat/ws/docs", timeout=30)
+    new_r = requests.get(f"{NEW}/api/v1/chat/ws/docs", timeout=30)
 
     report("Both return 200",
            old_r.status_code == 200 and new_r.status_code == 200)

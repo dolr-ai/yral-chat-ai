@@ -86,4 +86,12 @@ EXPOSE 8000
 # "main:app" means "in the file main.py, find the variable called app."
 # "--host 0.0.0.0" means "listen on ALL network interfaces" (not just localhost).
 # "--port 8000" means "listen on port 8000."
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# "--workers 4" runs 4 worker processes — each handles requests independently.
+#   Without this, a single worker processes ALL requests sequentially,
+#   which means if one request takes 2 seconds (AI API call), all other
+#   requests wait in line. With 4 workers, 4 requests run in parallel.
+#   We use 4 because our container has 1 CPU with 512MB RAM. Each worker
+#   uses ~50MB, so 4 workers = ~200MB total (well within 512MB limit).
+# Note: WebSocket connections are per-worker, so PG LISTEN/NOTIFY
+#   (Phase 5 future plan) is needed for cross-worker delivery.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
