@@ -57,6 +57,10 @@ def _format_influencer_response(inf: dict) -> dict:
     The mobile app expects specific field names and types.
     This function ensures we return the EXACT shape the app needs.
     """
+    # Strip moderation guardrails from system_instructions for display
+    system_instructions = inf.get("system_instructions", "")
+    system_prompt_display = moderation.strip_guardrails(system_instructions) if system_instructions else ""
+
     return {
         "id": inf["id"],
         "name": inf["name"],
@@ -65,8 +69,12 @@ def _format_influencer_response(inf: dict) -> dict:
         "description": inf.get("description") or "",
         "category": inf.get("category") or "",
         "is_active": inf.get("is_active", "active"),  # String, not bool!
+        "parent_principal_id": inf.get("parent_principal_id"),
+        "source": inf.get("source"),
+        "system_prompt": system_prompt_display,  # Old service calls it system_prompt
         "created_at": inf["created_at"].isoformat() if isinstance(inf["created_at"], datetime) else str(inf["created_at"]),
         "conversation_count": inf.get("conversation_count"),
+        "message_count": inf.get("message_count"),
     }
 
 
