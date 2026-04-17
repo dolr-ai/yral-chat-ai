@@ -55,3 +55,4 @@ venv/
 .idea/        # JetBrains IDE (PyCharm) settings
 .vscode/      # VS Code settings
 *.swp         # Vim swap files (temporary editor backups)
+.DS_Store

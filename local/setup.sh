@@ -60,7 +60,7 @@ echo ""
 echo "==> 2/4 Building images (app + Patroni) tagged as :local..."
 echo "    Building with --network=host to fix Docker Desktop DNS issues during build"
 echo "    Patroni image: ${PATRONI_IMAGE_REPO}:local"
-docker build --network=host -t "${PATRONI_IMAGE_REPO}:local" "${REPO_ROOT}/patroni"
+docker build --network=host -t "${PATRONI_IMAGE_REPO}:local" -f "${REPO_ROOT}/patroni/Dockerfile" "${REPO_ROOT}"
 echo "    App image: ${IMAGE_REPO}:local"
 docker build --network=host -t "${IMAGE_REPO}:local" "${REPO_ROOT}"
 
