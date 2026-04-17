@@ -76,6 +76,8 @@ services:
       YRAL_METADATA_NOTIFICATION_API_KEY: ${YRAL_METADATA_NOTIFICATION_API_KEY:-}
       # --- Admin ---
       ADMIN_KEY_TO_DELETE_INFLUENCER: ${ADMIN_KEY_TO_DELETE_INFLUENCER:-}
+      # --- Google Chat webhook (admin notifications) ---
+      GOOGLE_CHAT_WEBHOOK_URL: ${GOOGLE_CHAT_WEBHOOK_URL:-}
       # --- CORS ---
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     secrets:

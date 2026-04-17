@@ -157,6 +157,7 @@ export S3_PUBLIC_URL_BASE="${S3_PUBLIC_URL_BASE:-}"
 export YRAL_METADATA_NOTIFICATION_API_KEY="${YRAL_METADATA_NOTIFICATION_API_KEY:-}"
 export ADMIN_KEY_TO_DELETE_INFLUENCER="${ADMIN_KEY_TO_DELETE_INFLUENCER:-}"
 export CORS_ORIGINS="${CORS_ORIGINS:-*}"
+export GOOGLE_CHAT_WEBHOOK_URL="${GOOGLE_CHAT_WEBHOOK_URL:-}"
 
 docker compose pull
 # "docker compose up -d" starts the container in detached mode (background).

@@ -31,7 +31,7 @@ from fastapi.responses import JSONResponse
 from database import get_pool
 from auth import get_current_user
 from repositories import influencer_repo
-from services import character_generator, moderation
+from services import character_generator, moderation, google_chat
 from models import (
     InfluencerResponse, InfluencersListResponse, InfluencerDetailResponse,
     CreateInfluencerRequest, GeneratePromptRequest, GeneratePromptResponse,
@@ -400,7 +400,12 @@ async def admin_ban(
     influencer_id: str,
     x_admin_key: str = Header(None, alias="X-Admin-Key"),
 ):
-    """Admin: ban an influencer (requires X-Admin-Key header)."""
+    """
+    Admin: ban an influencer (requires X-Admin-Key header).
+
+    Sets the influencer's is_active to 'discontinued', hiding them from
+    the app. Sends a Google Chat notification to the admin team.
+    """
     if not config.ADMIN_KEY or x_admin_key != config.ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Invalid admin key")
 
@@ -409,9 +414,22 @@ async def admin_ban(
     if not inf:
         raise HTTPException(status_code=404, detail="Influencer not found")
 
-    await influencer_repo.ban(pool, inf["id"])
-    updated = await influencer_repo.get_by_id(pool, inf["id"])
-    return _format_influencer_detail(updated)
+    try:
+        await influencer_repo.ban(pool, inf["id"])
+        updated = await influencer_repo.get_by_id(pool, inf["id"])
+
+        # Notify admin team via Google Chat
+        await google_chat.notify_influencer_banned(
+            inf["id"], inf.get("display_name", "Unknown"),
+        )
+
+        return _format_influencer_detail(updated)
+    except Exception as e:
+        # Notify admin team about the failure
+        await google_chat.notify_influencer_ban_failed(
+            inf["id"], str(e),
+        )
+        raise HTTPException(status_code=500, detail=f"Ban failed: {e}")
 
 
 @router.post("/admin/influencers/{influencer_id}/unban")
@@ -419,7 +437,12 @@ async def admin_unban(
     influencer_id: str,
     x_admin_key: str = Header(None, alias="X-Admin-Key"),
 ):
-    """Admin: unban an influencer (requires X-Admin-Key header)."""
+    """
+    Admin: unban an influencer (requires X-Admin-Key header).
+
+    Sets the influencer's is_active back to 'active', making them
+    visible in the app again. Sends a Google Chat notification.
+    """
     if not config.ADMIN_KEY or x_admin_key != config.ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Invalid admin key")
 
@@ -428,6 +451,19 @@ async def admin_unban(
     if not inf:
         raise HTTPException(status_code=404, detail="Influencer not found")
 
-    await influencer_repo.unban(pool, inf["id"])
-    updated = await influencer_repo.get_by_id(pool, inf["id"])
-    return _format_influencer_detail(updated)
+    try:
+        await influencer_repo.unban(pool, inf["id"])
+        updated = await influencer_repo.get_by_id(pool, inf["id"])
+
+        # Notify admin team via Google Chat
+        await google_chat.notify_influencer_unbanned(
+            inf["id"], inf.get("display_name", "Unknown"),
+        )
+
+        return _format_influencer_detail(updated)
+    except Exception as e:
+        # Notify admin team about the failure
+        await google_chat.notify_influencer_unban_failed(
+            inf["id"], str(e),
+        )
+        raise HTTPException(status_code=500, detail=f"Unban failed: {e}")

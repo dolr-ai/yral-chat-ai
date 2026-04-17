@@ -154,6 +154,14 @@ RATE_LIMIT_PER_HOUR = _env_int("RATE_LIMIT_PER_HOUR", 5000)
 ADMIN_KEY = _env("ADMIN_KEY_TO_DELETE_INFLUENCER")
 
 # =========================================================================
+# GOOGLE CHAT WEBHOOK (admin notifications)
+# =========================================================================
+# Sends notifications to a Google Chat space when influencers are
+# banned/unbanned. Set up a webhook in Google Chat and paste the URL here.
+
+GOOGLE_CHAT_WEBHOOK_URL = _env("GOOGLE_CHAT_WEBHOOK_URL")
+
+# =========================================================================
 # JWT AUTH (expected issuers for token validation)
 # =========================================================================
 # These are the only issuers we trust. Tokens from any other issuer
