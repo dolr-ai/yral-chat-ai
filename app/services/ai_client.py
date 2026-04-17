@@ -8,11 +8,17 @@
 #   3. Transcribing audio messages (voice-to-text)
 #
 # HOW IT WORKS:
-# We use the OpenAI Python SDK with a CUSTOM BASE URL pointing to Gemini's
-# OpenAI-compatible API endpoint. This means we get to use the well-tested
-# OpenAI SDK instead of Google's custom SDK, while still using Gemini models.
+# - GEMINI: Uses the NATIVE Gemini API with ?key= authentication.
+#   This supports the newer AQ. format API keys from Google AI Studio
+#   and Google Cloud Console. We build the request manually via httpx.
 #
-# For NSFW influencers, we route to OpenRouter instead (fewer content restrictions).
+# - OPENROUTER: Uses the OpenAI Python SDK with Bearer auth.
+#   OpenRouter's API is OpenAI-compatible and works with the SDK directly.
+#
+# WHY NOT OpenAI SDK FOR GEMINI?
+# Google changed their API key format in 2026. The new AQ. keys cause
+# "Multiple authentication credentials" errors when sent as Bearer tokens
+# on the OpenAI-compatible endpoint. The native API with ?key= works fine.
 #
 # PORTED FROM: yral-ai-chat/src/services/ai.rs
 # ---------------------------------------------------------------------------
@@ -20,7 +26,6 @@
 import json
 import base64
 import logging
-from typing import Optional
 
 import httpx
 from openai import AsyncOpenAI
@@ -30,28 +35,17 @@ import config
 logger = logging.getLogger(__name__)
 
 # The message the AI sends when it can't generate a real response.
-# This matches the Rust service's FALLBACK_ERROR_MESSAGE.
 FALLBACK_ERROR_MESSAGE = "I'm having trouble responding right now. Please try again in a moment."
 
+# Gemini native API base URL (used with ?key= query parameter)
+GEMINI_NATIVE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
 
 # ---------------------------------------------------------------------------
-# AI CLIENT INSTANCES
+# OPENROUTER CLIENT (for NSFW influencers — uses OpenAI SDK)
 # ---------------------------------------------------------------------------
-# We create two OpenAI client instances:
-#   1. gemini_client — for normal (non-NSFW) influencers
-#   2. openrouter_client — for NSFW influencers (fewer content restrictions)
-#
-# Both use the OpenAI-compatible API format, just with different base URLs.
 
-def _create_gemini_client() -> AsyncOpenAI | None:
-    """Create a Gemini AI client if the API key is configured."""
-    if not config.GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY not set — AI chat will not work")
-        return None
-    return AsyncOpenAI(
-        api_key=config.GEMINI_API_KEY,
-        base_url=config.GEMINI_BASE_URL,
-    )
+_openrouter_client: AsyncOpenAI | None = None
 
 
 def _create_openrouter_client() -> AsyncOpenAI | None:
@@ -69,19 +63,6 @@ def _create_openrouter_client() -> AsyncOpenAI | None:
     )
 
 
-# Lazy-initialize clients on first use
-_gemini_client: AsyncOpenAI | None = None
-_openrouter_client: AsyncOpenAI | None = None
-
-
-def get_gemini_client() -> AsyncOpenAI | None:
-    """Get or create the Gemini client."""
-    global _gemini_client
-    if _gemini_client is None:
-        _gemini_client = _create_gemini_client()
-    return _gemini_client
-
-
 def get_openrouter_client() -> AsyncOpenAI | None:
     """Get or create the OpenRouter client."""
     global _openrouter_client
@@ -90,23 +71,132 @@ def get_openrouter_client() -> AsyncOpenAI | None:
     return _openrouter_client
 
 
-def get_client_for_influencer(is_nsfw: bool) -> tuple[AsyncOpenAI | None, str, int, float]:
-    """
-    Select the right AI client based on whether the influencer is NSFW.
+# ---------------------------------------------------------------------------
+# GEMINI NATIVE API (uses httpx with ?key= auth)
+# ---------------------------------------------------------------------------
 
-    RETURNS: (client, model_name, max_tokens, temperature)
-
-    For NSFW influencers: uses OpenRouter if configured, falls back to Gemini.
-    For normal influencers: always uses Gemini.
+def _build_gemini_contents(
+    system_instructions: str,
+    conversation_history: list[dict],
+    user_message: str,
+    media_urls: list[str] | None = None,
+) -> tuple[dict, list]:
     """
-    if is_nsfw:
-        client = get_openrouter_client()
-        if client:
-            return (client, config.OPENROUTER_MODEL,
-                    config.OPENROUTER_MAX_TOKENS, config.OPENROUTER_TEMPERATURE)
-    # Default to Gemini
-    return (get_gemini_client(), config.GEMINI_MODEL,
-            config.GEMINI_MAX_TOKENS, config.GEMINI_TEMPERATURE)
+    Build the 'system_instruction' and 'contents' payload for Gemini's
+    native generateContent API.
+
+    Gemini native format is different from OpenAI:
+    - system_instruction: separate top-level field (not a message)
+    - contents: list of {role: "user"/"model", parts: [{text: "..."}]}
+    - "model" role instead of "assistant"
+    - media is sent as inline parts, not as image_url objects
+    """
+    # System instruction (top-level, not inside contents)
+    system_instruction = {"parts": [{"text": system_instructions}]}
+
+    # Build contents array
+    contents = []
+
+    # Conversation history
+    for msg in conversation_history:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        # Gemini uses "model" instead of "assistant"
+        gemini_role = "model" if role == "assistant" else "user"
+
+        parts = []
+        if content:
+            parts.append({"text": content})
+
+        # Handle media in history
+        if role == "user":
+            msg_media = msg.get("media_urls")
+            if isinstance(msg_media, str):
+                try:
+                    msg_media = json.loads(msg_media)
+                except (json.JSONDecodeError, TypeError):
+                    msg_media = None
+            if msg_media:
+                for url in msg_media[:5]:
+                    # For URLs in history, reference them as file URIs
+                    parts.append({"text": f"[Image: {url}]"})
+
+        if parts:
+            contents.append({"role": gemini_role, "parts": parts})
+
+    # Current user message
+    user_parts = []
+    if user_message:
+        user_parts.append({"text": user_message})
+    if media_urls:
+        for url in media_urls[:5]:
+            user_parts.append({"text": f"[Image: {url}]"})
+    if user_parts:
+        contents.append({"role": "user", "parts": user_parts})
+
+    return system_instruction, contents
+
+
+async def _call_gemini(
+    contents: list,
+    system_instruction: dict | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
+) -> tuple[str, int]:
+    """
+    Call Gemini's native generateContent API.
+
+    Uses ?key= query parameter for authentication (works with AQ. format keys).
+
+    RETURNS: (response_text, token_count)
+    RAISES: Exception on API failure
+    """
+    url = f"{GEMINI_NATIVE_URL}/models/{config.GEMINI_MODEL}:generateContent"
+
+    payload = {
+        "contents": contents,
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+        },
+    }
+
+    # Add system instruction if provided
+    if system_instruction:
+        payload["systemInstruction"] = system_instruction
+
+    async with httpx.AsyncClient(timeout=config.GEMINI_TIMEOUT) as http:
+        response = await http.post(
+            url,
+            json=payload,
+            params={"key": config.GEMINI_API_KEY},
+            timeout=config.GEMINI_TIMEOUT,
+        )
+        response.raise_for_status()
+
+    data = response.json()
+
+    # Extract text from response
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise ValueError("No candidates in Gemini response")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    response_text = ""
+    for part in parts:
+        if "text" in part:
+            response_text += part["text"]
+
+    response_text = response_text.strip()
+
+    # Extract token count
+    usage = data.get("usageMetadata", {})
+    token_count = usage.get("candidatesTokenCount", 0)
+    if not token_count and response_text:
+        token_count = int(len(response_text) / 4)
+
+    return response_text, token_count
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +205,7 @@ def get_client_for_influencer(is_nsfw: bool) -> tuple[AsyncOpenAI | None, str, i
 
 def _build_user_content(text: str | None, media_urls: list[str] | None) -> str | list:
     """
-    Build the content payload for a user message.
-
-    If the message has no media, return plain text.
-    If the message has images, return a multimodal content array
-    with text + image URL parts (up to 5 images).
+    Build the content payload for OpenAI-format messages (used by OpenRouter).
     """
     if not media_urls:
         return text or ""
@@ -128,7 +214,7 @@ def _build_user_content(text: str | None, media_urls: list[str] | None) -> str |
     if text:
         parts.append({"type": "text", "text": text})
 
-    for url in media_urls[:5]:  # Limit to 5 images per message
+    for url in media_urls[:5]:
         parts.append({
             "type": "image_url",
             "image_url": {"url": url},
@@ -148,93 +234,88 @@ async def generate_response(
     Generate an AI response to a user's message.
 
     This is the CORE function of the entire chat service. It:
-    1. Selects the right AI model (Gemini or OpenRouter)
-    2. Builds the conversation context (system prompt + history + current message)
+    1. Selects the right AI model (Gemini native or OpenRouter)
+    2. Builds the conversation context
     3. Calls the AI API
     4. Returns the response text, token count, and whether it's a fallback
 
-    PARAMETERS:
-        system_instructions: The AI influencer's personality prompt
-        conversation_history: Last 10 messages for context
-        user_message: The current message from the user
-        is_nsfw: Whether to route to OpenRouter
-        media_urls: Image URLs to include with the message
+    ROUTING:
+    - Normal influencers → Gemini native API (with ?key= auth)
+    - NSFW influencers → OpenRouter via OpenAI SDK (with Bearer auth)
 
     RETURNS: (response_text, token_count, is_fallback)
-        - response_text: The AI's response
-        - token_count: Number of tokens used
-        - is_fallback: True if we returned the error message instead of a real response
     """
-    client, model, max_tokens, temperature = get_client_for_influencer(is_nsfw)
 
-    if not client:
-        logger.error("No AI client available")
+    # ---------------------------------------------------------------
+    # NSFW → OpenRouter (uses OpenAI SDK)
+    # ---------------------------------------------------------------
+    if is_nsfw:
+        client = get_openrouter_client()
+        if client:
+            try:
+                messages = [{"role": "system", "content": system_instructions}]
+
+                for msg in conversation_history:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if role == "user":
+                        msg_media = msg.get("media_urls")
+                        if isinstance(msg_media, str):
+                            try:
+                                msg_media = json.loads(msg_media)
+                            except (json.JSONDecodeError, TypeError):
+                                msg_media = None
+                        messages.append({"role": "user", "content": _build_user_content(content, msg_media)})
+                    else:
+                        messages.append({"role": "assistant", "content": content or ""})
+
+                messages.append({"role": "user", "content": _build_user_content(user_message, media_urls)})
+
+                response = await client.chat.completions.create(
+                    model=config.OPENROUTER_MODEL,
+                    messages=messages,
+                    max_tokens=config.OPENROUTER_MAX_TOKENS,
+                    temperature=config.OPENROUTER_TEMPERATURE,
+                )
+
+                response_text = response.choices[0].message.content or ""
+                response_text = response_text.strip()
+
+                token_count = 0
+                if response.usage:
+                    token_count = response.usage.completion_tokens or 0
+                if not token_count and response_text:
+                    token_count = int(len(response_text) / 4)
+
+                return (response_text, token_count, False)
+
+            except Exception as e:
+                logger.error(f"OpenRouter generation failed: {e}")
+                # Fall through to Gemini as backup
+
+    # ---------------------------------------------------------------
+    # Normal → Gemini native API (with ?key= auth)
+    # ---------------------------------------------------------------
+    if not config.GEMINI_API_KEY:
+        logger.error("No AI client available (GEMINI_API_KEY not set)")
         return (FALLBACK_ERROR_MESSAGE, 0, True)
 
-    # Build the messages array for the API call
-    messages = []
-
-    # 1. System message (the AI's personality)
-    messages.append({
-        "role": "system",
-        "content": system_instructions,
-    })
-
-    # 2. Conversation history (last 10 messages for context)
-    for msg in conversation_history:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        if role == "user":
-            # For user messages with media, build multimodal content
-            msg_media = msg.get("media_urls")
-            if isinstance(msg_media, str):
-                try:
-                    msg_media = json.loads(msg_media)
-                except (json.JSONDecodeError, TypeError):
-                    msg_media = None
-            messages.append({
-                "role": "user",
-                "content": _build_user_content(content, msg_media),
-            })
-        else:
-            messages.append({
-                "role": "assistant",
-                "content": content or "",
-            })
-
-    # 3. Current user message (with media if any)
-    messages.append({
-        "role": "user",
-        "content": _build_user_content(user_message, media_urls),
-    })
-
-    # Call the AI API
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
+        system_instruction, contents = _build_gemini_contents(
+            system_instructions, conversation_history, user_message, media_urls,
         )
 
-        # Extract the response text
-        response_text = response.choices[0].message.content or ""
-        response_text = response_text.strip()
-
-        # Extract token count
-        token_count = 0
-        if response.usage:
-            token_count = response.usage.completion_tokens or 0
-
-        if not token_count and response_text:
-            # Fallback token estimation: ~4 characters per token
-            token_count = int(len(response_text) / 4)
+        response_text, token_count = await _call_gemini(
+            contents=contents,
+            system_instruction=system_instruction,
+            temperature=config.GEMINI_TEMPERATURE,
+            max_tokens=config.GEMINI_MAX_TOKENS,
+        )
 
         return (response_text, token_count, False)
 
     except Exception as e:
-        logger.error(f"AI generation failed: {e}")
+        logger.error(f"Gemini generation failed: {e}")
         return (FALLBACK_ERROR_MESSAGE, 0, True)
 
 
@@ -272,25 +353,10 @@ async def extract_memories(
     """
     Extract factual information about the user from a conversation exchange.
 
-    This runs as a BACKGROUND TASK after every AI response. It uses the AI
-    to identify facts about the user (name, goals, preferences, etc.) and
-    stores them for future conversations.
-
-    The extracted memories are merged with existing ones. New information
-    overrides old (e.g., if the user changes their goal).
-
-    PARAMETERS:
-        user_message: What the user said
-        assistant_response: What the AI replied
-        existing_memories: Previously extracted memories
-        is_nsfw: Whether to use OpenRouter
-
-    RETURNS: Updated memories dict (merged with existing)
+    Uses the same routing as generate_response:
+    - NSFW → OpenRouter
+    - Normal → Gemini native API
     """
-    client, model, _, _ = get_client_for_influencer(is_nsfw)
-    if not client:
-        return existing_memories
-
     # Format existing memories for the prompt
     if existing_memories:
         memories_text = "\n".join(
@@ -306,27 +372,48 @@ async def extract_memories(
     )
 
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that returns valid JSON."},
-                {"role": "user", "content": prompt},
-            ],
+        # For NSFW, try OpenRouter first
+        if is_nsfw:
+            client = get_openrouter_client()
+            if client:
+                response = await client.chat.completions.create(
+                    model=config.OPENROUTER_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that returns valid JSON."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=1024,
+                    temperature=0.1,
+                )
+                response_text = response.choices[0].message.content or ""
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    new_memories = json.loads(response_text[start:end])
+                    if isinstance(new_memories, dict):
+                        return {**existing_memories, **new_memories}
+                return existing_memories
+
+        # Normal: use Gemini native API
+        if not config.GEMINI_API_KEY:
+            return existing_memories
+
+        contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        system_instruction = {"parts": [{"text": "You are a helpful assistant that returns valid JSON."}]}
+
+        response_text, _ = await _call_gemini(
+            contents=contents,
+            system_instruction=system_instruction,
+            temperature=0.1,
             max_tokens=1024,
-            temperature=0.1,  # Low temperature for factual extraction
         )
 
-        response_text = response.choices[0].message.content or ""
-
-        # Parse JSON from response (find the {} block)
         start = response_text.find("{")
         end = response_text.rfind("}") + 1
         if start >= 0 and end > start:
             new_memories = json.loads(response_text[start:end])
             if isinstance(new_memories, dict):
-                # Merge: new overrides old
-                merged = {**existing_memories, **new_memories}
-                return merged
+                return {**existing_memories, **new_memories}
 
         return existing_memories
 
@@ -336,27 +423,20 @@ async def extract_memories(
 
 
 # ---------------------------------------------------------------------------
-# AUDIO TRANSCRIPTION
+# AUDIO TRANSCRIPTION (already uses native Gemini API — no changes needed)
 # ---------------------------------------------------------------------------
 
 async def transcribe_audio(audio_url: str) -> str | None:
     """
     Transcribe an audio file using Gemini's native API.
 
-    This uses Gemini's NATIVE multimodal API (not the OpenAI-compatible one)
-    because audio transcription requires sending raw audio data, which the
-    OpenAI-compatible endpoint doesn't support well.
+    Uses ?key= query parameter for auth (works with AQ. format keys).
 
     FLOW:
     1. Download the audio file from the presigned S3 URL
     2. Base64-encode the audio bytes
     3. Send to Gemini's native generateContent endpoint
     4. Return the transcribed text
-
-    PARAMETERS:
-        audio_url: Presigned S3 URL to the audio file
-
-    RETURNS: Transcribed text, or None if transcription fails
     """
     if not config.GEMINI_API_KEY:
         logger.error("Cannot transcribe audio: GEMINI_API_KEY not set")
@@ -375,10 +455,7 @@ async def transcribe_audio(audio_url: str) -> str | None:
             audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
 
             # Step 3: Call Gemini's native generateContent API
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/"
-                f"models/{config.GEMINI_MODEL}:generateContent"
-            )
+            url = f"{GEMINI_NATIVE_URL}/models/{config.GEMINI_MODEL}:generateContent"
             payload = {
                 "contents": [{
                     "parts": [
@@ -404,7 +481,7 @@ async def transcribe_audio(audio_url: str) -> str | None:
             response = await http.post(
                 url,
                 json=payload,
-                headers={"x-goog-api-key": config.GEMINI_API_KEY},
+                params={"key": config.GEMINI_API_KEY},
                 timeout=60,
             )
             response.raise_for_status()

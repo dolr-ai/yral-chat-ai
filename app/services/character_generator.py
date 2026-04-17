@@ -18,7 +18,7 @@ import json
 import logging
 from typing import Optional
 
-from services.ai_client import get_gemini_client
+from services.ai_client import _call_gemini
 import config
 
 logger = logging.getLogger(__name__)
@@ -153,21 +153,16 @@ async def generate_system_instructions(concept: str) -> str | None:
                  warm, mystical tone. You mirror the user's language..."
                  (500 words of detailed personality instructions)
     """
-    client = get_gemini_client()
-    if not client:
+    if not config.GEMINI_API_KEY:
         return None
 
     try:
-        response = await client.chat.completions.create(
-            model=config.GEMINI_MODEL,
-            messages=[
-                {"role": "system", "content": GENERATE_PROMPT},
-                {"role": "user", "content": concept},
-            ],
-            max_tokens=config.GEMINI_MAX_TOKENS,
+        text, _ = await _call_gemini(
+            contents=[{"role": "user", "parts": [{"text": concept}]}],
+            system_instruction={"parts": [{"text": GENERATE_PROMPT}]},
             temperature=config.GEMINI_TEMPERATURE,
+            max_tokens=config.GEMINI_MAX_TOKENS,
         )
-        text = response.choices[0].message.content or ""
         if contains_safety_refusal(text):
             return None
         return text.strip()
@@ -195,26 +190,20 @@ async def validate_and_generate_metadata(system_instructions: str) -> dict | Non
     if contains_safety_refusal(system_instructions):
         return {"is_valid": False, "reason": "Content was flagged as inappropriate"}
 
-    client = get_gemini_client()
-    if not client:
+    if not config.GEMINI_API_KEY:
         return None
 
     try:
-        response = await client.chat.completions.create(
-            model=config.GEMINI_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that returns valid JSON."},
-                {"role": "user", "content": f"{VALIDATE_PROMPT}\n\nSystem Instructions:\n{system_instructions}"},
-            ],
-            max_tokens=config.GEMINI_MAX_TOKENS,
+        text, _ = await _call_gemini(
+            contents=[{"role": "user", "parts": [{"text": f"{VALIDATE_PROMPT}\n\nSystem Instructions:\n{system_instructions}"}]}],
+            system_instruction={"parts": [{"text": "You are a helpful assistant that returns valid JSON."}]},
             temperature=0.3,
+            max_tokens=config.GEMINI_MAX_TOKENS,
         )
-        text = response.choices[0].message.content or ""
 
         if contains_safety_refusal(text):
             return {"is_valid": False, "reason": "Content was flagged as inappropriate"}
 
-        # Parse JSON from response
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:
@@ -235,11 +224,10 @@ async def generate_initial_greeting(
     RETURNS: (greeting, suggested_messages)
     Falls back to a generic greeting if AI generation fails.
     """
-    client = get_gemini_client()
     fallback_greeting = f"Hey! I'm {display_name}! How can I help you today?"
     fallback_suggestions = []
 
-    if not client:
+    if not config.GEMINI_API_KEY:
         return (fallback_greeting, fallback_suggestions)
 
     try:
@@ -247,16 +235,12 @@ async def generate_initial_greeting(
             display_name=display_name,
             system_instructions=system_instructions,
         )
-        response = await client.chat.completions.create(
-            model=config.GEMINI_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that returns valid JSON."},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=config.GEMINI_MAX_TOKENS,
+        text, _ = await _call_gemini(
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            system_instruction={"parts": [{"text": "You are a helpful assistant that returns valid JSON."}]},
             temperature=0.7,
+            max_tokens=config.GEMINI_MAX_TOKENS,
         )
-        text = response.choices[0].message.content or ""
 
         start = text.find("{")
         end = text.rfind("}") + 1
@@ -280,8 +264,7 @@ async def generate_video_prompt(
 
     Used to create the default welcome video for new AI influencers.
     """
-    client = get_gemini_client()
-    if not client:
+    if not config.GEMINI_API_KEY:
         return None
 
     try:
@@ -289,16 +272,12 @@ async def generate_video_prompt(
             display_name=display_name,
             system_instructions=system_instructions,
         )
-        response = await client.chat.completions.create(
-            model=config.GEMINI_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=config.GEMINI_MAX_TOKENS,
+        text, _ = await _call_gemini(
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            system_instruction={"parts": [{"text": "You are a helpful assistant."}]},
             temperature=0.7,
+            max_tokens=config.GEMINI_MAX_TOKENS,
         )
-        text = response.choices[0].message.content or ""
         return text.strip() if text else None
     except Exception as e:
         logger.error(f"Failed to generate video prompt: {e}")
