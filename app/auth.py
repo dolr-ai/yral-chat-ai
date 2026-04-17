@@ -94,8 +94,9 @@ def get_current_user(request: Request) -> str:
         payload = jwt.decode(
             token,
             options={
-                "verify_signature": False,
-                "verify_aud": False,
+                "verify_signature": False,  # Trust the issuer (matches Rust service)
+                "verify_aud": False,        # Don't check audience claim
+                "verify_exp": True,         # DO check token expiration
             },
             algorithms=["RS256", "HS256"],
         )

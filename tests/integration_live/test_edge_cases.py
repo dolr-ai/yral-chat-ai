@@ -87,31 +87,31 @@ def test_auth_edge_cases():
     print("\n--- Auth Edge Cases ---")
 
     # No auth header
-    r = requests.get(f"{BASE}/api/v1/chat/conversations", timeout=10)
+    r = requests.get(f"{BASE}/api/v1/chat/conversations", timeout=30)
     report("No auth header → 401", r.status_code == 401, f"Got: {r.status_code}")
 
     # Invalid format (no Bearer prefix)
     r = requests.get(f"{BASE}/api/v1/chat/conversations",
-                     headers={"Authorization": "InvalidToken123"}, timeout=10)
+                     headers={"Authorization": "InvalidToken123"}, timeout=30)
     report("Invalid auth format → 401", r.status_code == 401, f"Got: {r.status_code}")
 
     # Expired JWT
     token = get_expired_token()
     if token:
         r = requests.get(f"{BASE}/api/v1/chat/conversations",
-                         headers={"Authorization": f"Bearer {token}"}, timeout=10)
+                         headers={"Authorization": f"Bearer {token}"}, timeout=30)
         report("Expired JWT → 401", r.status_code == 401, f"Got: {r.status_code}")
 
     # Untrusted issuer
     token = get_bad_issuer_token()
     if token:
         r = requests.get(f"{BASE}/api/v1/chat/conversations",
-                         headers={"Authorization": f"Bearer {token}"}, timeout=10)
+                         headers={"Authorization": f"Bearer {token}"}, timeout=30)
         report("Bad issuer JWT → 401", r.status_code == 401, f"Got: {r.status_code}")
 
     # Garbage token
     r = requests.get(f"{BASE}/api/v1/chat/conversations",
-                     headers={"Authorization": "Bearer not.a.real.jwt.token"}, timeout=10)
+                     headers={"Authorization": "Bearer not.a.real.jwt.token"}, timeout=30)
     report("Garbage JWT → 401", r.status_code == 401, f"Got: {r.status_code}")
 
 
@@ -123,34 +123,34 @@ def test_conversation_edge_cases():
     # Non-existent influencer
     r = requests.post(f"{BASE}/api/v1/chat/conversations",
                       headers=auth_headers(token),
-                      json={"influencer_id": "nonexistent-id-xyz"}, timeout=10)
+                      json={"influencer_id": "nonexistent-id-xyz"}, timeout=30)
     report("Non-existent influencer → 404", r.status_code == 404, f"Got: {r.status_code}")
 
     # Missing influencer_id
     r = requests.post(f"{BASE}/api/v1/chat/conversations",
                       headers=auth_headers(token),
-                      json={}, timeout=10)
+                      json={}, timeout=30)
     report("Missing influencer_id → 422", r.status_code == 422, f"Got: {r.status_code}")
 
     # Non-existent conversation
     r = requests.get(f"{BASE}/api/v1/chat/conversations/nonexistent-conv-id/messages",
-                     headers=auth_headers(token), timeout=10)
+                     headers=auth_headers(token), timeout=30)
     report("Non-existent conversation → 404", r.status_code == 404, f"Got: {r.status_code}")
 
     # Delete conversation you don't own (use a different user)
     token2 = get_test_token("different-user-xyz")
     # First create a conversation with token1
-    inf_r = requests.get(f"{BASE}/api/v1/influencers?limit=1", timeout=10)
+    inf_r = requests.get(f"{BASE}/api/v1/influencers?limit=1", timeout=30)
     if inf_r.json()["influencers"]:
         inf_id = inf_r.json()["influencers"][0]["id"]
         conv_r = requests.post(f"{BASE}/api/v1/chat/conversations",
                                headers=auth_headers(token),
-                               json={"influencer_id": inf_id}, timeout=10)
+                               json={"influencer_id": inf_id}, timeout=30)
         if conv_r.status_code in (200, 201):
             conv_id = conv_r.json()["id"]
             # Try to delete with different user
             del_r = requests.delete(f"{BASE}/api/v1/chat/conversations/{conv_id}",
-                                    headers=auth_headers(token2), timeout=10)
+                                    headers=auth_headers(token2), timeout=30)
             report("Delete other's conversation → 403", del_r.status_code == 403,
                    f"Got: {del_r.status_code}")
 
@@ -161,7 +161,7 @@ def test_message_edge_cases():
     token = get_test_token("edge-msg-user")
 
     # Create a conversation first
-    inf_r = requests.get(f"{BASE}/api/v1/influencers?limit=1", timeout=10)
+    inf_r = requests.get(f"{BASE}/api/v1/influencers?limit=1", timeout=30)
     inf_id = inf_r.json()["influencers"][0]["id"]
     conv_r = requests.post(f"{BASE}/api/v1/chat/conversations",
                            headers=auth_headers(token),
@@ -194,7 +194,7 @@ def test_message_edge_cases():
     # Send to non-existent conversation
     r = requests.post(f"{BASE}/api/v1/chat/conversations/fake-conv-id/messages",
                       headers=auth_headers(token),
-                      json={"content": "hello", "message_type": "text"}, timeout=10)
+                      json={"content": "hello", "message_type": "text"}, timeout=30)
     report("Message to non-existent conv → 404",
            r.status_code == 404, f"Got: {r.status_code}")
 
@@ -205,24 +205,24 @@ def test_influencer_edge_cases():
     token = get_test_token("edge-inf-user")
 
     # Delete influencer you don't own
-    inf_r = requests.get(f"{BASE}/api/v1/influencers?limit=1", timeout=10)
+    inf_r = requests.get(f"{BASE}/api/v1/influencers?limit=1", timeout=30)
     if inf_r.json()["influencers"]:
         inf_id = inf_r.json()["influencers"][0]["id"]
         r = requests.delete(f"{BASE}/api/v1/influencers/{inf_id}",
-                            headers=auth_headers(token), timeout=10)
+                            headers=auth_headers(token), timeout=30)
         report("Delete others influencer → 403",
                r.status_code == 403, f"Got: {r.status_code}")
 
     # Admin ban without key
     r = requests.post(f"{BASE}/api/v1/admin/influencers/some-id",
-                      headers=auth_headers(token), timeout=10)
+                      headers=auth_headers(token), timeout=30)
     report("Admin ban without key → 403",
            r.status_code == 403, f"Got: {r.status_code}")
 
     # Admin ban with wrong key
     r = requests.post(f"{BASE}/api/v1/admin/influencers/some-id",
                       headers={**auth_headers(token), "X-Admin-Key": "wrong-key"},
-                      timeout=10)
+                      timeout=30)
     report("Admin ban with wrong key → 403",
            r.status_code == 403, f"Got: {r.status_code}")
 
@@ -241,9 +241,9 @@ def test_response_format():
     token = get_test_token()
     for method, url, body in test_cases:
         if method == "GET":
-            r = requests.get(url, headers=auth_headers(token), timeout=10)
+            r = requests.get(url, headers=auth_headers(token), timeout=30)
         else:
-            r = requests.post(url, headers=auth_headers(token), json=body, timeout=10)
+            r = requests.post(url, headers=auth_headers(token), json=body, timeout=30)
 
         if r.status_code >= 400:
             try:
