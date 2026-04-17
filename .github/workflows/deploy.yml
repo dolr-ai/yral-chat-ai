@@ -335,7 +335,7 @@ jobs:
             # Log in to GHCR using the GitHub token (piped via stdin for security)
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             # Pull the specific image tagged with this commit's SHA
-            docker pull ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }}
+            docker pull ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }} 2>/dev/null || { docker pull ${{ env.PATRONI_IMAGE_REPO }}:latest && docker tag ${{ env.PATRONI_IMAGE_REPO }}:latest ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }}; }
 
       # Pre-pull the Patroni image on Server 2 (same process)
       - name: Pre-pull Patroni image on Server 2
@@ -346,7 +346,7 @@ jobs:
           key: ${{ secrets.HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY }}
           script: |
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }}
+            docker pull ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }} 2>/dev/null || { docker pull ${{ env.PATRONI_IMAGE_REPO }}:latest && docker tag ${{ env.PATRONI_IMAGE_REPO }}:latest ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }}; }
 
       # Pre-pull the Patroni image on Server 3 (same process)
       - name: Pre-pull Patroni image on Server 3
@@ -357,7 +357,7 @@ jobs:
           key: ${{ secrets.HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY }}
           script: |
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }}
+            docker pull ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }} 2>/dev/null || { docker pull ${{ env.PATRONI_IMAGE_REPO }}:latest && docker tag ${{ env.PATRONI_IMAGE_REPO }}:latest ${{ env.PATRONI_IMAGE_REPO }}:${{ github.sha }}; }
 
       # Run the actual Swarm stack deploy on rishi-1 (the Swarm manager).
       # The deploy-db-stack.sh script handles: creating secrets, merging
