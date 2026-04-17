@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# metabase.caddy.template — Caddy reverse proxy for the Metabase dashboard.
+#
+# Metabase runs alongside the chat service as an analytics dashboard.
+# It connects to our PostgreSQL database and lets the team build charts
+# and run SQL queries through a web interface.
+#
+# TEMPLATE VARIABLES (replaced at deploy time):
+#   ${PROJECT_NAME} → e.g., "chat-ai"
+#   ${PROJECT_REPO} → e.g., "yral-chat-ai"
+#
+# RENDERED FILE LOCATION:
+#   /home/deploy/caddy/conf.d/${PROJECT_REPO}-metabase.caddy
+#
+# ACCESS URL:
+#   https://metabase-${PROJECT_NAME}.rishi.yral.com
+# ---------------------------------------------------------------------------
+metabase-${PROJECT_NAME}.rishi.yral.com {
+    tls internal
+    encode gzip zstd
+
+    reverse_proxy ${PROJECT_REPO}-metabase:3000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}

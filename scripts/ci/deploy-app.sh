@@ -259,13 +259,24 @@ if [ "${HEALTHY}" = "1" ]; then
     }
     # Swap the temporary file into the real location (atomic on most filesystems)
     mv "${SNIPPET_TMP}" "${SNIPPET_DEST}"
-    # Validate again WITH our new snippet to make sure WE didn't break anything
+
+    # ---- Also render the Metabase Caddy snippet (if template exists) ----
+    if [ -f "caddy/metabase.caddy.template" ]; then
+        METABASE_DEST="/home/deploy/caddy/conf.d/${PROJECT_REPO}-metabase.caddy"
+        sed -e "s|\${PROJECT_NAME}|${PROJECT_NAME}|g" \
+            -e "s|\${PROJECT_REPO}|${PROJECT_REPO}|g" \
+            caddy/metabase.caddy.template > "${METABASE_DEST}.tmp"
+        mv "${METABASE_DEST}.tmp" "${METABASE_DEST}"
+    fi
+
+    # Validate again WITH our new snippets to make sure WE didn't break anything
     docker exec caddy caddy validate --config /etc/caddy/Caddyfile || {
         echo "FATAL: new snippet broke Caddy config, removing"
         rm -f "${SNIPPET_DEST}"
+        rm -f "/home/deploy/caddy/conf.d/${PROJECT_REPO}-metabase.caddy"
         exit 1
     }
-    # Tell Caddy to reload its config (picks up the new/updated snippet).
+    # Tell Caddy to reload its config (picks up the new/updated snippets).
     # --force: reload even if the config hasn't changed (safety measure)
     docker exec caddy caddy reload --config /etc/caddy/Caddyfile --force
     echo "==> ${PROJECT_REPO} ${IMAGE_TAG} deployed and verified"
