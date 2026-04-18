@@ -93,6 +93,12 @@ def _get_s3_client():
         config=BotoConfig(
             signature_version="s3v4",
             s3={"addressing_style": "path"},
+            # boto3 1.36+ adds CRC32 checksums by default, which forces
+            # aws-chunked transfer encoding. Storj's S3 gateway rejects
+            # chunked PUTs with "MissingContentLength". Skip checksums
+            # unless the operation requires them.
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
         ),
     )
     logger.info("S3 client initialized")
