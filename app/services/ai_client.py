@@ -92,6 +92,17 @@ async def _fetch_and_encode_image(url: str) -> dict:
     works for the text portion — Gemini will at least know an image was
     attached even if we can't load it.
     """
+    # The mobile app sends back the S3 storage KEY (e.g. "user-id/uuid.jpg"),
+    # not the presigned URL, in `media_urls`. Convert it before fetching.
+    # `generate_presigned_url` passes through existing http(s) URLs unchanged.
+    if not (url.startswith("http://") or url.startswith("https://")):
+        from services import storage as _storage
+        presigned = _storage.generate_presigned_url(url)
+        if not presigned:
+            logger.warning(f"No presigned URL for storage key {url[:80]}")
+            return {"text": "[image attachment — missing]"}
+        url = presigned
+
     try:
         # follow_redirects=True so CDN redirects (e.g. picsum → fastly) don't
         # silently drop the image. Storj presigned URLs don't redirect, but
