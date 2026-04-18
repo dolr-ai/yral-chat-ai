@@ -23,6 +23,7 @@
 
 import json
 import logging
+import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request, Query, Header
@@ -406,7 +407,7 @@ async def admin_ban(
     Sets the influencer's is_active to 'discontinued', hiding them from
     the app. Sends a Google Chat notification to the admin team.
     """
-    if not config.ADMIN_KEY or x_admin_key != config.ADMIN_KEY:
+    if not config.ADMIN_KEY or not x_admin_key or not secrets.compare_digest(x_admin_key, config.ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Invalid admin key")
 
     pool = await get_pool()
@@ -443,7 +444,7 @@ async def admin_unban(
     Sets the influencer's is_active back to 'active', making them
     visible in the app again. Sends a Google Chat notification.
     """
-    if not config.ADMIN_KEY or x_admin_key != config.ADMIN_KEY:
+    if not config.ADMIN_KEY or not x_admin_key or not secrets.compare_digest(x_admin_key, config.ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Invalid admin key")
 
     pool = await get_pool()

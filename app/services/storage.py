@@ -160,9 +160,16 @@ def generate_presigned_url(key: str) -> str:
     if not key:
         return ""
 
-    # Already a full URL — no need to presign
+    # Already a full URL — only return if it's from our known S3 domain
     if key.startswith("http://") or key.startswith("https://"):
-        return key
+        # Only allow URLs from our S3 endpoint or known avatar storage
+        allowed_hosts = ["gateway.storjshare.io", "your-objectstorage.com"]
+        from urllib.parse import urlparse
+        host = urlparse(key).hostname or ""
+        if any(host.endswith(h) for h in allowed_hosts):
+            return key
+        logger.warning(f"Blocked non-S3 URL in presign: {key[:50]}")
+        return ""  # Block arbitrary URLs
 
     client = _get_s3_client()
     if not client:

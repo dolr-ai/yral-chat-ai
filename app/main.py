@@ -133,10 +133,13 @@ if config.CORS_ORIGINS == "*":
 else:
     origins = [o.strip() for o in config.CORS_ORIGINS.split(",")]
 
+# allow_credentials=False when origins is "*" (security: prevents credential
+# leaking to arbitrary origins). The mobile app uses Bearer tokens in headers,
+# not cookies, so credentials=False is fine.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=("*" not in origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -153,17 +156,9 @@ async def auth_me(request: Request):
     return {"user_id": user_id}
 
 
-@app.get("/debug/routes")
-async def debug_routes():
-    """List all registered routes — helpful for debugging 404s."""
-    routes = []
-    for route in app.routes:
-        if hasattr(route, "methods"):
-            routes.append({
-                "path": route.path,
-                "methods": list(route.methods),
-            })
-    return {"routes": routes}
+# /debug/routes endpoint REMOVED — it was exposing all API routes publicly.
+# Use `curl https://chat-ai.rishi.yral.com/openapi.json` for API docs instead
+# (FastAPI's built-in OpenAPI spec, which is standard practice).
 
 
 # ---------------------------------------------------------------------------

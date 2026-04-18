@@ -22,8 +22,9 @@
 # PORTED FROM: yral-ai-chat/src/models/ (Rust structs with serde)
 # ---------------------------------------------------------------------------
 
-from typing import Optional
-from pydantic import BaseModel
+from enum import Enum
+from typing import Optional, Literal
+from pydantic import BaseModel, Field
 
 
 # =========================================================================
@@ -80,10 +81,10 @@ class InfluencerDetailResponse(BaseModel):
 
 class CreateInfluencerRequest(BaseModel):
     """Request body for creating a new AI influencer."""
-    name: str
-    display_name: str
-    system_instructions: str
-    bot_principal_id: str  # The ID to assign to this influencer
+    name: str = Field(min_length=3, max_length=50, pattern=r'^[a-z0-9_-]+$')
+    display_name: str = Field(min_length=1, max_length=255)
+    system_instructions: str = Field(min_length=10, max_length=10000)
+    bot_principal_id: str = Field(min_length=1, max_length=255)
     avatar_url: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
@@ -243,12 +244,12 @@ class SendMessageRequest(BaseModel):
     Request to send a message in a conversation.
     MATCHES: SendMessageRequestDto.kt in the mobile app.
     """
-    content: Optional[str] = None
-    message_type: str  # "text", "multimodal", "image", "audio"
-    media_urls: Optional[list[str]] = None
-    audio_url: Optional[str] = None
-    audio_duration_seconds: Optional[int] = None
-    client_message_id: Optional[str] = None
+    content: Optional[str] = Field(default=None, max_length=50000)  # 50KB max
+    message_type: Literal["text", "multimodal", "image", "audio"] = "text"
+    media_urls: Optional[list[str]] = Field(default=None, max_length=10)  # Max 10 files
+    audio_url: Optional[str] = Field(default=None, max_length=2000)
+    audio_duration_seconds: Optional[int] = Field(default=None, ge=0, le=3600)  # 0-60 min
+    client_message_id: Optional[str] = Field(default=None, max_length=255)
 
 
 class SendMessageResponse(BaseModel):

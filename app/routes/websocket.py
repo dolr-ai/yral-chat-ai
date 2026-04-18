@@ -69,7 +69,11 @@ async def ws_inbox(websocket: WebSocket, user_id: str, token: str = Query(defaul
     try:
         payload = pyjwt.decode(
             token,
-            options={"verify_signature": False, "verify_aud": False},
+            options={
+                "verify_signature": False,
+                "verify_aud": False,
+                "verify_exp": True,  # Reject expired tokens
+            },
             algorithms=["RS256", "HS256"],
         )
     except Exception:

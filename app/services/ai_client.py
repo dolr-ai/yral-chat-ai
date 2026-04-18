@@ -426,20 +426,61 @@ async def extract_memories(
 # AUDIO TRANSCRIPTION (already uses native Gemini API — no changes needed)
 # ---------------------------------------------------------------------------
 
+def _is_safe_url(url: str) -> bool:
+    """
+    Validate that a URL is safe to fetch (not SSRF).
+
+    Blocks:
+    - Private IP ranges (127.x, 10.x, 172.16-31.x, 192.168.x)
+    - Metadata endpoints (169.254.169.254)
+    - Non-HTTP(S) schemes
+    - URLs without a host
+    """
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.hostname or ""
+        if not host:
+            return False
+        # Block private/internal IPs
+        blocked_prefixes = (
+            "127.", "10.", "192.168.", "0.", "169.254.",
+            "172.16.", "172.17.", "172.18.", "172.19.",
+            "172.20.", "172.21.", "172.22.", "172.23.",
+            "172.24.", "172.25.", "172.26.", "172.27.",
+            "172.28.", "172.29.", "172.30.", "172.31.",
+        )
+        if any(host.startswith(p) for p in blocked_prefixes):
+            return False
+        if host in ("localhost", "metadata.google.internal"):
+            return False
+        return True
+    except Exception:
+        return False
+
+
 async def transcribe_audio(audio_url: str) -> str | None:
     """
     Transcribe an audio file using Gemini's native API.
 
     Uses ?key= query parameter for auth (works with AQ. format keys).
+    Validates URL to prevent SSRF attacks.
 
     FLOW:
-    1. Download the audio file from the presigned S3 URL
-    2. Base64-encode the audio bytes
-    3. Send to Gemini's native generateContent endpoint
-    4. Return the transcribed text
+    1. Validate the URL is not internal/private (SSRF protection)
+    2. Download the audio file from the presigned S3 URL
+    3. Base64-encode the audio bytes
+    4. Send to Gemini's native generateContent endpoint
+    5. Return the transcribed text
     """
     if not config.GEMINI_API_KEY:
         logger.error("Cannot transcribe audio: GEMINI_API_KEY not set")
+        return None
+
+    if not _is_safe_url(audio_url):
+        logger.error(f"Audio URL blocked (SSRF protection): {audio_url[:50]}")
         return None
 
     try:
