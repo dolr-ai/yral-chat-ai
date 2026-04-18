@@ -75,7 +75,52 @@ def get_openrouter_client() -> AsyncOpenAI | None:
 # GEMINI NATIVE API (uses httpx with ?key= auth)
 # ---------------------------------------------------------------------------
 
-def _build_gemini_contents(
+# Hard cap on per-image decoded size (bytes) before base64. Gemini native
+# has a ~20 MB total request limit; a 5 MB raw image → ~6.7 MB base64, so
+# 5 MB leaves room for system prompt + history + other images. The mobile
+# client also compresses to ~2 MB now (see Sarvesh's fix), so this is a
+# defensive ceiling for old clients / iOS / web uploaders.
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+_IMAGE_DOWNLOAD_TIMEOUT = 5.0  # seconds
+
+
+async def _fetch_and_encode_image(url: str) -> dict:
+    """
+    Download an image URL and return a Gemini `inlineData` part.
+
+    Returns a `{"text": "..."}` placeholder on failure so the chat still
+    works for the text portion — Gemini will at least know an image was
+    attached even if we can't load it.
+    """
+    try:
+        # follow_redirects=True so CDN redirects (e.g. picsum → fastly) don't
+        # silently drop the image. Storj presigned URLs don't redirect, but
+        # robustness matters for any non-Storj paths (avatars, old hosts, etc.).
+        async with httpx.AsyncClient(
+            timeout=_IMAGE_DOWNLOAD_TIMEOUT, follow_redirects=True
+        ) as http:
+            resp = await http.get(url)
+            resp.raise_for_status()
+    except Exception as e:
+        logger.warning(f"Image fetch failed for {url[:80]}: {e}")
+        return {"text": "[image attachment — failed to load]"}
+
+    data = resp.content
+    if len(data) > _MAX_IMAGE_BYTES:
+        logger.warning(f"Image too large ({len(data)} bytes > {_MAX_IMAGE_BYTES}); dropping")
+        return {"text": "[image attachment — too large]"}
+    if not data:
+        return {"text": "[image attachment — empty]"}
+
+    # Prefer Content-Type from response; fall back to a safe default.
+    mime = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
+    if not mime.startswith("image/"):
+        mime = "image/jpeg"
+
+    return {"inlineData": {"mimeType": mime, "data": base64.b64encode(data).decode("ascii")}}
+
+
+async def _build_gemini_contents(
     system_instructions: str,
     conversation_history: list[dict],
     user_message: str,
@@ -89,7 +134,9 @@ def _build_gemini_contents(
     - system_instruction: separate top-level field (not a message)
     - contents: list of {role: "user"/"model", parts: [{text: "..."}]}
     - "model" role instead of "assistant"
-    - media is sent as inline parts, not as image_url objects
+    - Images MUST be sent as `inlineData` (base64) — the native API does
+      NOT fetch remote URLs. Passing a URL as text (as we used to) meant
+      the AI literally just saw a URL string and no pixels.
     """
     # System instruction (top-level, not inside contents)
     system_instruction = {"parts": [{"text": system_instructions}]}
@@ -109,7 +156,8 @@ def _build_gemini_contents(
         if content:
             parts.append({"text": content})
 
-        # Handle media in history
+        # Inline images for historical user messages so the model can still
+        # refer back to pictures from earlier turns (each API call is stateless).
         if role == "user":
             msg_media = msg.get("media_urls")
             if isinstance(msg_media, str):
@@ -119,8 +167,7 @@ def _build_gemini_contents(
                     msg_media = None
             if msg_media:
                 for url in msg_media[:5]:
-                    # For URLs in history, reference them as file URIs
-                    parts.append({"text": f"[Image: {url}]"})
+                    parts.append(await _fetch_and_encode_image(url))
 
         if parts:
             contents.append({"role": gemini_role, "parts": parts})
@@ -131,7 +178,7 @@ def _build_gemini_contents(
         user_parts.append({"text": user_message})
     if media_urls:
         for url in media_urls[:5]:
-            user_parts.append({"text": f"[Image: {url}]"})
+            user_parts.append(await _fetch_and_encode_image(url))
     if user_parts:
         contents.append({"role": "user", "parts": user_parts})
 
@@ -301,7 +348,7 @@ async def generate_response(
         return (FALLBACK_ERROR_MESSAGE, 0, True)
 
     try:
-        system_instruction, contents = _build_gemini_contents(
+        system_instruction, contents = await _build_gemini_contents(
             system_instructions, conversation_history, user_message, media_urls,
         )
 
