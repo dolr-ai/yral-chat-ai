@@ -109,10 +109,18 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # This is the "app" variable that uvicorn looks for.
 # lifespan=lifespan tells FastAPI to run our startup/shutdown logic.
+# Disable FastAPI's auto-exposed API docs (/docs, /redoc, /openapi.json).
+# These leak internal route shapes, request/response schemas, and admin
+# endpoints to any unauthenticated caller. The old Rust service hid these;
+# we match that behavior. Mobile clients and integrations already know the
+# contract — OpenAPI is only useful during development.
 app = FastAPI(
     title=config.APP_NAME,
     version=config.APP_VERSION,
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 
