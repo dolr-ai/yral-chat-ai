@@ -16,14 +16,33 @@ TMPDIR="/tmp/sync-data"
 mkdir -p "$TMPDIR"
 START=$(date +%s)
 
-# Last sync timestamp (default: first migration date)
-LAST_SYNC="2026-04-15T00:00:00"
-[ -f "$STATE_FILE" ] && LAST_SYNC=$(cat "$STATE_FILE")
+# Last sync timestamp (default: first migration date).
+# Validate state-file content before trusting it — an earlier version of
+# this script stripped ALL whitespace from the saved timestamp (see the
+# SYNC_POINT fix below), which silently corrupted the state file to
+# values like "2026-04-2010:25:11.08866+02" (no space between date and
+# time). Those values now get rejected by the regex below and we fall
+# back to the default, self-healing across deploys of this fix.
+DEFAULT_LAST_SYNC="2026-04-15T00:00:00"
+LAST_SYNC="$DEFAULT_LAST_SYNC"
+if [ -f "$STATE_FILE" ]; then
+    STATE_CONTENT=$(cat "$STATE_FILE" | xargs)
+    if [[ "$STATE_CONTENT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[T\ ][0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+        LAST_SYNC="$STATE_CONTENT"
+    else
+        echo "[sync] WARN: state file content invalid ('$STATE_CONTENT'), using default"
+    fi
+fi
 
 echo "[sync] Since: $LAST_SYNC"
 
-# Capture current time BEFORE querying (so we don't miss rows)
-SYNC_POINT=$(psql "$OLD_DB_URL" -t -c "SELECT NOW()::text" | tr -d ' ')
+# Capture current time BEFORE querying (so we don't miss rows).
+# Use psql -At (unaligned, tuples-only) — this returns the value without
+# padding whitespace, so no post-processing is needed. The previous
+# implementation did `... -t ... | tr -d ' '` which also deleted the
+# space between the date and time inside the timestamp, corrupting
+# the state file. Do NOT re-introduce `tr -d ' '` here.
+SYNC_POINT=$(psql "$OLD_DB_URL" -At -c "SELECT NOW()::text")
 
 # Count what needs syncing
 INF=$(psql "$OLD_DB_URL" -t -c "SELECT COUNT(*) FROM ai_influencers WHERE created_at > '$LAST_SYNC' OR updated_at > '$LAST_SYNC'" | tr -d ' ')
