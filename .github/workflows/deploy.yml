@@ -405,6 +405,10 @@ jobs:
     runs-on: ubuntu-latest
     # Wait for build-and-push (need the images) AND deploy-db-stack (DB must be up)
     needs: [config, build-and-push, deploy-db-stack]
+    # OIDC permissions for Vault JWT auth + repo read for checkout
+    permissions:
+      id-token: write
+      contents: read
     # Run even if deploy-db-stack was SKIPPED (stateless services have no DB job).
     # "always()" evaluates all conditions even if upstream jobs were skipped.
     # We require build-and-push to succeed, but accept db-stack being either
@@ -424,6 +428,19 @@ jobs:
           # Load project.config first, then servers.config
           grep -v '^#' project.config | grep -v '^$' >> $GITHUB_ENV
           grep -v '^#' servers.config | grep -v '^$' >> $GITHUB_ENV
+
+      # Fetch secrets from HashiCorp Vault using GitHub OIDC JWT auth.
+      # This avoids storing the notification API key as a GitHub Secret —
+      # it comes directly from Vault at deploy time (same as the old Rust service).
+      - name: Import secrets from Vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: https://vault.yral.com
+          method: jwt
+          role: yral-chat-ai-role
+          jwtGithubAudience: "https://github.com/dolr-ai"
+          secrets: |
+            secret/data/yral-chat-ai/YRAL_METADATA_NOTIFICATION_API_KEY value | YRAL_METADATA_NOTIFICATION_API_KEY ;
 
       # ============================================================
       # CANARY DEPLOY: rishi-1 first. If anything goes wrong on
