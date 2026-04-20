@@ -34,14 +34,16 @@ import json
 import logging
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, Query
 
+import config
 from database import get_pool
 from auth import get_current_user
 from repositories import influencer_repo, conversation_repo, message_repo
-from services import ai_client, push_notifications, websocket_manager
+from services import ai_client, push_notifications, replicate, storage, websocket_manager
 from models import (
-    CreateConversationRequest, SendMessageRequest,
+    CreateConversationRequest, GenerateImageRequest, SendMessageRequest,
     SendMessageResponse, ChatMessage, ConversationResponse,
     ConversationsListResponse, ConversationInfluencer,
     ConversationLastMessage, ConversationMessagesResponse,
@@ -567,6 +569,170 @@ async def _background_memory_extraction(
             logger.info(f"Updated memories for conversation {conversation_id}")
     except Exception as e:
         logger.warning(f"Memory extraction failed (non-fatal): {e}")
+
+
+# =========================================================================
+# GENERATE IMAGE IN CONVERSATION
+# =========================================================================
+# Ported from Rust `yral-ai-chat/src/routes/chat.rs::generate_image`.
+#
+# NOTE (2026-04-20): The YRAL mobile client does NOT call this endpoint
+# (grepped entire yral-mobile repo — zero matches for /images or
+# generateImage). It exists purely for API parity with the old Rust
+# service and for any future admin/web/internal tooling. Keeping it
+# here unblocks the migration from "100% feature-parity" concern without
+# introducing new contract obligations on any active caller.
+
+async def _generate_image_prompt_from_context(pool, conversation_id: str) -> str:
+    """
+    Ask Gemini to synthesize an image-generation prompt from the last
+    ~10 messages of the conversation. Used when the caller doesn't
+    supply an explicit prompt.
+    """
+    messages = await message_repo.list_by_conversation(
+        pool, conversation_id, limit=10, offset=0, order="desc",
+    )
+    messages.reverse()
+    context_lines = [
+        f"{m['role']}: {m['content']}" for m in messages if m.get("content")
+    ]
+    context_str = "\n".join(context_lines)
+
+    system = (
+        "You are an AI assistant helping to visualize a scene. Based on "
+        "the recent conversation, generate a detailed image generation "
+        "prompt that captures the current context, action, or requested "
+        "visual. Output ONLY the prompt, no other text."
+    )
+    user = f"Conversation Context:\n{context_str}\n\nGenerate an image prompt:"
+
+    text, _, _ = await ai_client.generate_response(
+        system_instructions=system,
+        conversation_history=[],
+        user_message=user,
+        is_nsfw=False,
+        media_urls=None,
+    )
+    return text.strip()
+
+
+@router.post("/conversations/{conversation_id}/images", status_code=201)
+async def generate_conversation_image(
+    conversation_id: str,
+    body: GenerateImageRequest,
+    request: Request,
+):
+    """
+    Generate an AI image inside a conversation, saved as an assistant
+    message of type `image`. Uses the influencer's avatar as a reference
+    image (via flux-kontext-dev) when available, so the generated scene
+    is visually consistent with the character.
+
+    Flow:
+      1. Validate Replicate is configured (else 503).
+      2. Load + authorize the conversation (404/403).
+      3. Load the influencer; reject discontinued bots (403).
+      4. Resolve the prompt — use body.prompt if provided, else
+         synthesize from conversation context via Gemini.
+      5. Call Replicate (with or without reference image).
+      6. Download the Replicate result, re-upload to our S3.
+      7. Persist as assistant message with media_urls=[s3_key].
+      8. Return 201 + the message.
+
+    This is API-parity with the old Rust service; mobile client does not
+    currently invoke it (see module-level note above).
+    """
+    user_id = get_current_user(request)
+    pool = await get_pool()
+
+    if not config.REPLICATE_API_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="Image generation service not available",
+        )
+
+    conv = await conversation_repo.get_by_id(pool, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if not await _can_access_conversation(pool, user_id, conv):
+        raise HTTPException(status_code=403, detail="Not your conversation")
+
+    influencer_id = conv.get("influencer_id")
+    if not influencer_id:
+        raise HTTPException(status_code=404, detail="Influencer not found")
+    inf = await influencer_repo.get_by_id(pool, influencer_id)
+    if not inf:
+        raise HTTPException(status_code=404, detail="Influencer not found")
+    if inf.get("is_active") == "discontinued":
+        raise HTTPException(
+            status_code=403,
+            detail="This bot has been deleted and can no longer generate images.",
+        )
+
+    # 1. Determine prompt
+    final_prompt = (body.prompt or "").strip()
+    if not final_prompt:
+        final_prompt = await _generate_image_prompt_from_context(pool, conversation_id)
+    logger.info(f"Generating image for conversation {conversation_id}: {final_prompt[:100]}")
+
+    # 2. Resolve influencer avatar to a URL Replicate can fetch (if any)
+    avatar_raw = (inf.get("avatar_url") or "").strip()
+    input_image_url: str | None = None
+    if avatar_raw:
+        if avatar_raw.startswith("http"):
+            input_image_url = avatar_raw
+        else:
+            input_image_url = storage.generate_presigned_url(avatar_raw) or None
+
+    # 3. Call Replicate — use reference variant when we have an avatar
+    if input_image_url:
+        image_url = await replicate.generate_image_with_reference(
+            final_prompt, input_image_url, aspect_ratio="9:16",
+        )
+    else:
+        image_url = await replicate.generate_image(final_prompt, aspect_ratio="9:16")
+
+    if not image_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to generate image from upstream provider",
+        )
+
+    # 4. Download the generated image, re-upload to our S3 (stable URL + ACL)
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
+            resp = await http.get(image_url)
+            resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"Failed to download generated image from {image_url[:80]}: {e}")
+        raise HTTPException(status_code=503, detail="Failed to fetch generated image")
+
+    image_bytes = resp.content
+    if not image_bytes:
+        raise HTTPException(status_code=503, detail="Generated image was empty")
+    content_type = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
+    if not content_type.startswith("image/"):
+        content_type = "image/jpeg"
+
+    s3_key, _ = await storage.upload(
+        user_id=user_id,
+        file_bytes=image_bytes,
+        file_extension=".jpg",
+        content_type=content_type,
+    )
+
+    # 5. Save as assistant message of type `image`
+    msg = await message_repo.create(
+        pool,
+        conversation_id=conversation_id,
+        role="assistant",
+        content="",
+        message_type="image",
+        media_urls=[s3_key],
+        sender_id=influencer_id,
+        token_count=0,
+    )
+    return _format_message(msg)
 
 
 # =========================================================================

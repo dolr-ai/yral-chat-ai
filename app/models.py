@@ -265,6 +265,22 @@ class SendMessageResponse(BaseModel):
     assistant_message: Optional[ChatMessage] = None
 
 
+class GenerateImageRequest(BaseModel):
+    """
+    Request body for POST /api/v1/chat/conversations/{id}/images.
+
+    If `prompt` is provided and non-empty, it is used verbatim. Otherwise
+    the server synthesizes a prompt from the last ~10 messages of the
+    conversation via Gemini.
+
+    NOTE (2026-04-20): The YRAL mobile client does NOT currently call this
+    endpoint — it exists for parity with the old Rust service and for any
+    future admin / web / internal tooling that wants to trigger an in-chat
+    image generation. Keep it here for API-parity even if unused.
+    """
+    prompt: Optional[str] = Field(default=None, max_length=2000)
+
+
 class ConversationMessagesResponse(BaseModel):
     """
     Paginated list of messages in a conversation.
