@@ -26,7 +26,7 @@ uvicorn[standard]==0.34.0
 # blocks the thread while waiting for DB), asyncpg lets other requests
 # proceed while one request waits for the database. Essential for
 # WebSockets and high-concurrency chat workloads.
-asyncpg==0.30.0
+asyncpg==0.31.0
 
 # --- AUTHENTICATION ---
 
