@@ -1,0 +1,200 @@
+# ---------------------------------------------------------------------------
+# sync.yml — Incremental DB sync from old Rust service to new Python service.
+#
+# WHAT THIS DOES:
+# Every 5 minutes, queries the old PostgreSQL database for new rows
+# (influencers, conversations, messages) and inserts them into our
+# Patroni cluster. This keeps both databases in sync during Alpha testing.
+#
+# WHY:
+# During Alpha testing, production users still use the old service (chat.yral.com)
+# while Alpha testers use the new service (chat-ai.rishi.yral.com). Both need
+# to see the same data, so we sync old → new every 5 minutes.
+#
+# WHEN TO DISABLE:
+# After DNS switch (go-live), disable this workflow. The old service will
+# be decommissioned and there's nothing left to sync.
+#   gh workflow disable sync.yml -R dolr-ai/yral-chat-ai
+#
+# MANUAL TRIGGER:
+#   gh workflow run sync.yml -R dolr-ai/yral-chat-ai
+# ---------------------------------------------------------------------------
+
+name: Incremental DB Sync (Alpha)
+
+on:
+  schedule:
+    # Every 5 minutes during Alpha testing.
+    # Disable after go-live: gh workflow disable sync.yml
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}  # Manual trigger for testing
+
+jobs:
+  sync:
+    name: Sync old DB → new DB
+    runs-on: ubuntu-latest
+    # Only run if OLD_DB_URL is set (prevents errors if secret removed after go-live)
+    if: ${{ vars.SYNC_ENABLED != 'false' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load config
+        run: |
+          grep -v '^#' project.config | grep -v '^\s*$' >> $GITHUB_ENV
+          grep -v '^#' servers.config | grep -v '^\s*$' >> $GITHUB_ENV
+
+      - name: Run incremental sync via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ env.SERVER_1_IP }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY }}
+          command_timeout: 3m
+          envs: OLD_DB_URL,NEW_DB_URL,SWARM_STACK
+          script: |
+            # Find the Patroni container (has psql installed)
+            PATRONI=$(docker ps --format '{{.Names}}' | grep "${SWARM_STACK}_patroni-rishi-1" | head -1)
+            if [ -z "$PATRONI" ]; then
+              echo "ERROR: Patroni container not found"
+              exit 1
+            fi
+
+            # Find current Patroni leader
+            LEADER=$(docker exec "$PATRONI" patronictl -c /etc/patroni.yml list -f json 2>/dev/null \
+              | python3 -c "import sys,json; [print(m['Host']) for m in json.load(sys.stdin) if m['Role']=='Leader']" 2>/dev/null \
+              || echo "")
+
+            if [ -z "$LEADER" ]; then
+              echo "WARNING: Could not determine leader, using haproxy"
+              LEADER="${SWARM_STACK}_haproxy-rishi-1"
+            fi
+
+            echo "Using DB leader: $LEADER"
+
+            # Run the sync inside the Patroni container
+            docker exec -e OLD_DB_URL="$OLD_DB_URL" \
+                        -e NEW_DB_URL="$NEW_DB_URL" \
+                        "$PATRONI" bash -c '
+              STATE_FILE="/tmp/yral-chat-sync-state"
+              START_TIME=$(date +%s)
+
+              # Read last sync timestamp
+              if [ -f "$STATE_FILE" ]; then
+                  LAST_SYNC=$(cat "$STATE_FILE")
+              else
+                  LAST_SYNC="2026-04-15T00:00:00"
+              fi
+
+              echo "[sync] Since: $LAST_SYNC"
+              SYNC_POINT=$(psql "$OLD_DB_URL" -t -c "SELECT NOW()::text" | tr -d " ")
+
+              # Count what needs syncing
+              INF=$(psql "$OLD_DB_URL" -t -c "SELECT COUNT(*) FROM ai_influencers WHERE created_at > '"'"'$LAST_SYNC'"'"' OR updated_at > '"'"'$LAST_SYNC'"'"'" | tr -d " ")
+              CONV=$(psql "$OLD_DB_URL" -t -c "SELECT COUNT(*) FROM conversations WHERE created_at > '"'"'$LAST_SYNC'"'"'" | tr -d " ")
+              MSG=$(psql "$OLD_DB_URL" -t -c "SELECT COUNT(*) FROM messages WHERE created_at > '"'"'$LAST_SYNC'"'"'" | tr -d " ")
+
+              echo "[sync] To sync: $INF influencers, $CONV conversations, $MSG messages"
+
+              if [ "$INF" = "0" ] && [ "$CONV" = "0" ] && [ "$MSG" = "0" ]; then
+                  echo "[sync] Nothing to sync"
+                  echo "$SYNC_POINT" > "$STATE_FILE"
+                  exit 0
+              fi
+
+              # Sync influencers (upsert — catches ban/unban changes)
+              if [ "$INF" -gt 0 ] 2>/dev/null; then
+                  psql "$OLD_DB_URL" -c "\COPY (
+                      SELECT id,name,display_name,avatar_url,description,category,
+                             system_instructions,personality_traits,initial_greeting,
+                             suggested_messages,is_active,is_nsfw,parent_principal_id,
+                             source,created_at,updated_at,metadata
+                      FROM ai_influencers
+                      WHERE created_at > '"'"'$LAST_SYNC'"'"' OR updated_at > '"'"'$LAST_SYNC'"'"'
+                  ) TO STDOUT WITH CSV" | \
+                  psql "$NEW_DB_URL" -c "
+                      CREATE TEMP TABLE _si (LIKE ai_influencers INCLUDING DEFAULTS);
+                      \COPY _si FROM STDIN WITH CSV
+                      INSERT INTO ai_influencers SELECT * FROM _si
+                      ON CONFLICT (id) DO UPDATE SET
+                          display_name=EXCLUDED.display_name,
+                          is_active=EXCLUDED.is_active,
+                          avatar_url=EXCLUDED.avatar_url,
+                          description=EXCLUDED.description,
+                          system_instructions=EXCLUDED.system_instructions,
+                          updated_at=EXCLUDED.updated_at;
+                      DROP TABLE _si;
+                  " 2>/dev/null || echo "[sync] WARNING: some influencers failed"
+              fi
+
+              # Sync conversations
+              if [ "$CONV" -gt 0 ] 2>/dev/null; then
+                  psql "$OLD_DB_URL" -c "\COPY (
+                      SELECT id,user_id,influencer_id,created_at,updated_at,metadata
+                      FROM conversations WHERE created_at > '"'"'$LAST_SYNC'"'"'
+                  ) TO STDOUT WITH CSV" | \
+                  psql "$NEW_DB_URL" -c "
+                      CREATE TEMP TABLE _sc (
+                          id VARCHAR(255), user_id VARCHAR(255), influencer_id VARCHAR(255),
+                          created_at TIMESTAMP, updated_at TIMESTAMP, metadata JSONB
+                      );
+                      \COPY _sc FROM STDIN WITH CSV
+                      INSERT INTO conversations (id,user_id,influencer_id,created_at,updated_at,metadata)
+                      SELECT * FROM _sc s
+                      WHERE NOT EXISTS (
+                          SELECT 1 FROM conversations c
+                          WHERE c.user_id=s.user_id AND c.influencer_id=s.influencer_id
+                      )
+                      ON CONFLICT (id) DO NOTHING;
+                      DROP TABLE _sc;
+                  " 2>/dev/null || echo "[sync] WARNING: some conversations failed"
+              fi
+
+              # Sync messages
+              if [ "$MSG" -gt 0 ] 2>/dev/null; then
+                  psql "$NEW_DB_URL" -c "ALTER TABLE messages DISABLE TRIGGER trigger_update_conversation_timestamp" 2>/dev/null || true
+
+                  psql "$OLD_DB_URL" -c "\COPY (
+                      SELECT id,conversation_id,role,content,message_type,media_urls,
+                             audio_url,audio_duration_seconds,token_count,client_message_id,
+                             created_at,metadata,status,is_read
+                      FROM messages WHERE created_at > '"'"'$LAST_SYNC'"'"'
+                  ) TO STDOUT WITH CSV" | \
+                  psql "$NEW_DB_URL" -c "
+                      CREATE TEMP TABLE _sm (
+                          id VARCHAR(255), conversation_id VARCHAR(255), role VARCHAR(20),
+                          content TEXT, message_type VARCHAR(20), media_urls JSONB,
+                          audio_url TEXT, audio_duration_seconds INTEGER, token_count INTEGER,
+                          client_message_id VARCHAR(255), created_at TIMESTAMP,
+                          metadata JSONB, status VARCHAR(20), is_read BOOLEAN
+                      );
+                      \COPY _sm FROM STDIN WITH CSV
+                      INSERT INTO messages (id,conversation_id,role,content,message_type,
+                          media_urls,audio_url,audio_duration_seconds,token_count,
+                          client_message_id,created_at,metadata,status,is_read)
+                      SELECT * FROM _sm
+                      WHERE EXISTS (SELECT 1 FROM conversations WHERE id=_sm.conversation_id)
+                      ON CONFLICT (id) DO NOTHING;
+                      DROP TABLE _sm;
+                  " 2>/dev/null || echo "[sync] WARNING: some messages failed"
+
+                  # Backfill sender_id for new messages
+                  psql "$NEW_DB_URL" -c "
+                      UPDATE messages m SET sender_id=c.user_id FROM conversations c
+                      WHERE m.conversation_id=c.id AND m.role='"'"'user'"'"' AND m.sender_id IS NULL;
+                      UPDATE messages m SET sender_id=c.influencer_id FROM conversations c
+                      WHERE m.conversation_id=c.id AND m.role='"'"'assistant'"'"' AND m.sender_id IS NULL;
+                  " 2>/dev/null || true
+
+                  psql "$NEW_DB_URL" -c "ALTER TABLE messages ENABLE TRIGGER trigger_update_conversation_timestamp" 2>/dev/null || true
+              fi
+
+              # Update state
+              echo "$SYNC_POINT" > "$STATE_FILE"
+              ELAPSED=$(( $(date +%s) - START_TIME ))
+              echo "[sync] Done: $INF inf, $CONV conv, $MSG msg in ${ELAPSED}s"
+            '
+        env:
+          OLD_DB_URL: ${{ secrets.OLD_DB_URL }}
+          NEW_DB_URL: ${{ secrets.DATABASE_URL_SERVER_1 }}
+          SWARM_STACK: ${{ env.SWARM_STACK }}
