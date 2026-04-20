@@ -154,7 +154,15 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# AUTH TEST + DEBUG ENDPOINTS
+# SENTRY VERIFICATION ENDPOINT (remove after confirming Sentry works)
+# ---------------------------------------------------------------------------
+@app.get("/sentry-debug")
+async def trigger_error():
+    division_by_zero = 1 / 0
+
+
+# ---------------------------------------------------------------------------
+# AUTH TEST ENDPOINT
 # ---------------------------------------------------------------------------
 
 @app.get("/api/v1/auth/me")
