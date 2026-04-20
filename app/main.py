@@ -33,14 +33,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import database
 from auth import get_current_user
-from infra import init_sentry
 import config
 
 # ---------------------------------------------------------------------------
 # LOGGING SETUP
 # ---------------------------------------------------------------------------
-# Configure Python's logging to show timestamps, log level, and messages.
-# This output appears in `docker logs <container>` and in CI deploy logs.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -49,11 +46,24 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# SENTRY ERROR TRACKING
+# SENTRY ERROR TRACKING — initialized BEFORE app = FastAPI()
 # ---------------------------------------------------------------------------
-# Sentry catches all unhandled exceptions and sends them to apm.yral.com.
-# If SENTRY_DSN is not set, this does nothing (safe for local dev).
-init_sentry()
+# Must be called before FastAPI() is created so Sentry can hook into the
+# framework. Uses the exact pattern from Sentry's FastAPI setup guide.
+import os
+_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        send_default_pii=True,
+        traces_sample_rate=1.0,
+        profiles_sample_rate=1.0,
+        environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+        release=os.environ.get("SENTRY_RELEASE"),
+    )
+    logger.info(f"Sentry initialized: {_sentry_dsn[:40]}...")
+else:
+    logger.info("Sentry not configured (SENTRY_DSN not set)")
 
 
 # ---------------------------------------------------------------------------
