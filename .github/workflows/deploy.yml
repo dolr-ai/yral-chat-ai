@@ -461,7 +461,7 @@ jobs:
           key: ${{ secrets.HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY }}
           # Copy: docker-compose file, Caddy config template, deploy script,
           # migration script, SQL migration files, and project config
-          source: "docker-compose.yml,caddy/snippet.caddy.template,caddy/metabase.caddy.template,scripts/ci/deploy-app.sh,scripts/ci/run-migrations.sh,migrations,project.config"
+          source: "docker-compose.yml,caddy/snippet.caddy.template,caddy/metabase.caddy.template,scripts/ci/deploy-app.sh,scripts/ci/run-migrations.sh,migrations,project.config,servers.config"
           # Destination directory on the server
           target: /home/deploy/${{ env.PROJECT_REPO }}
 
@@ -509,7 +509,7 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
           S3_PUBLIC_URL_BASE: ${{ secrets.S3_PUBLIC_URL_BASE }}
-          YRAL_METADATA_NOTIFICATION_API_KEY: ${{ secrets.YRAL_METADATA_NOTIFICATION_API_KEY }}
+          YRAL_METADATA_NOTIFICATION_API_KEY: ${{ env.YRAL_METADATA_NOTIFICATION_API_KEY }}
           ADMIN_KEY_TO_DELETE_INFLUENCER: ${{ secrets.ADMIN_KEY_TO_DELETE_INFLUENCER }}
           CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
           GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
@@ -523,7 +523,7 @@ jobs:
           host: ${{ env.SERVER_2_IP }}
           username: ${{ env.DEPLOY_USER }}
           key: ${{ secrets.HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY }}
-          source: "docker-compose.yml,caddy/snippet.caddy.template,caddy/metabase.caddy.template,scripts/ci/deploy-app.sh,scripts/ci/run-migrations.sh,migrations,project.config"
+          source: "docker-compose.yml,caddy/snippet.caddy.template,caddy/metabase.caddy.template,scripts/ci/deploy-app.sh,scripts/ci/run-migrations.sh,migrations,project.config,servers.config"
           target: /home/deploy/${{ env.PROJECT_REPO }}
 
       # Deploy to rishi-2 (same process as rishi-1).
@@ -557,7 +557,7 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
           S3_PUBLIC_URL_BASE: ${{ secrets.S3_PUBLIC_URL_BASE }}
-          YRAL_METADATA_NOTIFICATION_API_KEY: ${{ secrets.YRAL_METADATA_NOTIFICATION_API_KEY }}
+          YRAL_METADATA_NOTIFICATION_API_KEY: ${{ env.YRAL_METADATA_NOTIFICATION_API_KEY }}
           ADMIN_KEY_TO_DELETE_INFLUENCER: ${{ secrets.ADMIN_KEY_TO_DELETE_INFLUENCER }}
           CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
           GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
