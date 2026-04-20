@@ -48,7 +48,7 @@ openai==1.82.0
 
 # boto3 — AWS S3 client. Used to upload/download media files
 # (images, audio) to Hetzner Object Storage (S3-compatible).
-boto3==1.38.6
+boto3==1.42.91
 
 # --- HTTP CLIENT ---
 
