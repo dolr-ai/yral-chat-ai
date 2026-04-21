@@ -60,6 +60,18 @@ def _format_message(msg: dict) -> dict:
     if media_urls == []:
         media_urls = None
 
+    # Presign S3 keys → HTTP URLs so mobile app can display images
+    if media_urls:
+        from services import storage
+        media_urls = [storage.generate_presigned_url(u) for u in media_urls if u]
+        if not any(media_urls):
+            media_urls = None
+
+    audio_url = msg.get("audio_url")
+    if audio_url and not audio_url.startswith("http"):
+        from services import storage
+        audio_url = storage.generate_presigned_url(audio_url)
+
     created_at = msg["created_at"]
     if isinstance(created_at, datetime):
         created_at = created_at.isoformat()
@@ -71,7 +83,7 @@ def _format_message(msg: dict) -> dict:
         "content": msg.get("content"),
         "message_type": msg["message_type"],
         "media_urls": media_urls,
-        "audio_url": msg.get("audio_url"),
+        "audio_url": audio_url,
         "audio_duration_seconds": msg.get("audio_duration_seconds"),
         "token_count": None,  # No AI tokens in human chat
         "created_at": created_at,

@@ -76,6 +76,19 @@ def _format_message(msg: dict) -> dict:
     if media_urls == []:
         media_urls = None  # Mobile app expects null, not empty list
 
+    # PRESIGN S3 keys → full HTTP URLs so mobile app can display images.
+    # Without this, mobile app receives raw S3 keys like "user123/abc.jpg"
+    # instead of presigned URLs, causing images to show as pink/broken.
+    if media_urls:
+        media_urls = [storage.generate_presigned_url(u) for u in media_urls if u]
+        if not any(media_urls):
+            media_urls = None
+
+    # Same for audio_url — presign if it's an S3 key
+    audio_url = msg.get("audio_url")
+    if audio_url and not audio_url.startswith("http"):
+        audio_url = storage.generate_presigned_url(audio_url)
+
     created_at = msg["created_at"]
     if isinstance(created_at, datetime):
         created_at = created_at.isoformat()
@@ -87,7 +100,7 @@ def _format_message(msg: dict) -> dict:
         "content": msg.get("content"),
         "message_type": msg["message_type"],
         "media_urls": media_urls,
-        "audio_url": msg.get("audio_url"),
+        "audio_url": audio_url,
         "audio_duration_seconds": msg.get("audio_duration_seconds"),
         "token_count": msg.get("token_count"),
         "created_at": created_at,
@@ -222,7 +235,17 @@ async def create_conversation(body: CreateConversationRequest, request: Request)
     conv = await conversation_repo.get_by_id(pool, conv["id"])
     msg_count = await message_repo.count_by_conversation(pool, conv["id"])
 
-    return _format_conversation(conv, message_count=msg_count, show_suggestions=True)
+    # Fetch recent messages (includes the greeting we just saved).
+    # The mobile app uses recent_messages from this response to display
+    # the initial greeting. Without this, the greeting doesn't show.
+    recent = await message_repo.get_recent_for_context(pool, conv["id"], 10)
+    formatted_recent = [_format_message(m) for m in recent] if recent else None
+
+    return _format_conversation(
+        conv, message_count=msg_count,
+        recent_messages=formatted_recent,
+        show_suggestions=True,
+    )
 
 
 # =========================================================================
