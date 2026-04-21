@@ -148,6 +148,16 @@ RATE_LIMIT_PER_MINUTE = _env_int("RATE_LIMIT_PER_MINUTE", 300)
 RATE_LIMIT_PER_HOUR = _env_int("RATE_LIMIT_PER_HOUR", 5000)
 
 # =========================================================================
+# IMAGE HISTORY WINDOW
+# =========================================================================
+# How many RECENT history messages get their images inlined when calling
+# Gemini. Older messages get a text placeholder instead. This prevents
+# downloading 10+ images from S3 (200-500ms each) before every AI call.
+# Default 3 = inline images from the last 3 messages only.
+
+IMAGE_HISTORY_WINDOW = _env_int("IMAGE_HISTORY_WINDOW", 3)
+
+# =========================================================================
 # ADMIN
 # =========================================================================
 
