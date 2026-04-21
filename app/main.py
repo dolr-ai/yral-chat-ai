@@ -27,13 +27,15 @@
 import logging
 from contextlib import asynccontextmanager
 
-import sentry_sdk
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 import database
 from auth import get_current_user
 import config
+# Reusable Sentry helper from infra/sentry.py — shared across every
+# service built from the dolr-ai template. See the init call below.
+from infra import init_sentry
 
 # ---------------------------------------------------------------------------
 # LOGGING SETUP
@@ -48,22 +50,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # SENTRY ERROR TRACKING — initialized BEFORE app = FastAPI()
 # ---------------------------------------------------------------------------
-# Must be called before FastAPI() is created so Sentry can hook into the
-# framework. Uses the exact pattern from Sentry's FastAPI setup guide.
-import os
-_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
-if _sentry_dsn:
-    sentry_sdk.init(
-        dsn=_sentry_dsn,
-        send_default_pii=True,
-        traces_sample_rate=1.0,
-        profiles_sample_rate=1.0,
-        environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
-        release=os.environ.get("SENTRY_RELEASE"),
-    )
-    logger.info(f"Sentry initialized: {_sentry_dsn[:40]}...")
-else:
-    logger.info("Sentry not configured (SENTRY_DSN not set)")
+# Must be called before FastAPI() is created so Sentry can hook the
+# framework's request/response lifecycle. We delegate to the shared
+# helper in infra/sentry.py (re-exported by infra/__init__.py as
+# `init_sentry`) — that helper is the single source of truth for how
+# any dolr-ai service initializes Sentry. It:
+#
+#   - Reads SENTRY_DSN, SENTRY_ENVIRONMENT, SENTRY_RELEASE,
+#     SENTRY_TRACES_RATE, SENTRY_PROFILES_RATE from env vars.
+#   - Adds FastAPI + Starlette + Logging integrations so exceptions
+#     in HTTP handlers and logger.error(...) calls flow to Sentry
+#     automatically.
+#   - Sets send_default_pii=False (safer default than the inline
+#     version had previously — request bodies and query params with
+#     user info no longer attach to events by default).
+#   - No-ops silently if SENTRY_DSN is empty (local dev friendly).
+#
+# WHY we stopped using an inline sentry_sdk.init(...) here: the inline
+# version drifted from the template's shared helper — it was missing
+# the FastApi/Starlette/Logging integrations AND was hardcoded with
+# send_default_pii=True, exposing PII in events. Cutting over to
+# self-hosted Sentry was the right moment to also realign with the
+# helper. See yral-rishi-sentry/PROGRESS.md Phase 6 for context.
+init_sentry()
 
 
 # ---------------------------------------------------------------------------
@@ -161,14 +170,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ---------------------------------------------------------------------------
-# SENTRY VERIFICATION ENDPOINT (remove after confirming Sentry works)
-# ---------------------------------------------------------------------------
-@app.get("/sentry-debug")
-async def trigger_error():
-    division_by_zero = 1 / 0
 
 
 # ---------------------------------------------------------------------------
