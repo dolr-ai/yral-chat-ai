@@ -66,7 +66,7 @@ RUN apt-get update && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         postgresql-16 postgresql-client-16 && \
-    pip3 install --no-cache-dir "patroni[etcd3]" psycopg2-binary && \
+    pip3 install --no-cache-dir "patroni[etcd3]" psycopg2-binary boto3 && \
     rm -rf /var/lib/apt/lists/*
 
 # Create the data directory where PostgreSQL stores its files.
@@ -96,10 +96,12 @@ COPY patroni/init.sql /scripts/init.sql
 COPY patroni/post_init.sh /scripts/post_init.sh
 # entrypoint.sh: reads Swarm secrets, cleans up lock files, starts Patroni
 COPY patroni/entrypoint.sh /entrypoint.sh
+# archive-to-s3.sh: WAL archiving script for Point-In-Time Recovery
+COPY patroni/archive-to-s3.sh /scripts/archive-to-s3.sh
 # migrations/: SQL migration files so a fresh cluster bootstraps to the latest schema
 COPY migrations/ /scripts/migrations/
 # Make the scripts executable (chmod +x = allow execution)
-RUN chmod +x /scripts/post_init.sh /entrypoint.sh
+RUN chmod +x /scripts/post_init.sh /entrypoint.sh /scripts/archive-to-s3.sh
 
 # Switch to the "postgres" user for all runtime operations.
 # PostgreSQL requires running as a non-root user (it refuses to start as root).

@@ -369,7 +369,7 @@ jobs:
           username: ${{ env.DEPLOY_USER }}
           key: ${{ secrets.HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY }}
           # "envs" lists environment variables to pass to the remote script
-          envs: IMAGE_TAG,POSTGRES_PASSWORD,REPLICATION_PASSWORD,GITHUB_TOKEN,GITHUB_ACTOR,STACK_DIR
+          envs: IMAGE_TAG,POSTGRES_PASSWORD,REPLICATION_PASSWORD,GITHUB_TOKEN,GITHUB_ACTOR,STACK_DIR,BACKUP_S3_ACCESS_KEY,BACKUP_S3_SECRET_KEY
           script: |
             # Make the deploy script executable
             chmod +x ${STACK_DIR}/scripts/ci/deploy-db-stack.sh
@@ -387,6 +387,9 @@ jobs:
           GITHUB_ACTOR: ${{ github.actor }}
           # Path where the stack files were copied to on the server
           STACK_DIR: /home/deploy/${{ env.SWARM_STACK }}-stack
+          # S3 credentials for WAL archiving (passed to Patroni containers)
+          BACKUP_S3_ACCESS_KEY: ${{ secrets.BACKUP_S3_ACCESS_KEY }}
+          BACKUP_S3_SECRET_KEY: ${{ secrets.BACKUP_S3_SECRET_KEY }}
 
   # ============================================================================
   # JOB 3: Deploy the app container + Caddy reverse proxy snippet to

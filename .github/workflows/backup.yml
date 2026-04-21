@@ -29,7 +29,7 @@ on:
     # Cron expression: minute hour day-of-month month day-of-week
     # "0 3 * * *" = at minute 0, hour 3, every day, every month, every weekday
     # = 3:00 AM UTC daily
-    - cron: '0 3 * * *'
+    - cron: '0 */4 * * *'  # Every 4 hours: 12AM, 4AM, 8AM, 12PM, 4PM, 8PM UTC
 
   # Also allow manual trigger from the GitHub Actions tab (or gh CLI)
   workflow_dispatch:

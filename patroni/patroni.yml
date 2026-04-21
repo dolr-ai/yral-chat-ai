@@ -97,6 +97,22 @@ bootstrap:
         # before replicas have consumed it)
         max_replication_slots: 10
 
+        # ----- WAL ARCHIVING (Point-In-Time Recovery) -----
+        # Send every completed WAL file to S3 for permanent storage.
+        # This enables restoring to ANY second in the past (PITR).
+        # The script compresses and uploads each 16MB WAL file to
+        # s3://rishi-yral/<PROJECT_REPO>/wal/<wal_filename>.gz
+        #
+        # If the archive fails (S3 down), PostgreSQL retries automatically.
+        # WAL files stay on disk until successfully archived.
+        archive_mode: "on"
+        archive_command: '/scripts/archive-to-s3.sh %p %f'
+        # Flush WAL to archive every 5 minutes even if not full (16 MB).
+        # Without this, low-traffic periods could have up to 16 MB of
+        # un-archived data. With archive_timeout=300, max data loss from
+        # un-archived WAL is 5 minutes.
+        archive_timeout: 300
+
   # How to initialize the database cluster on the very first start
   initdb:
     # Use UTF8 encoding (supports all characters, including emoji)

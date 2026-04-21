@@ -171,6 +171,47 @@ if [ "${WITH_DATABASE:-true}" = "true" ]; then
 fi
 
 # ----------------------------------------------------------------------
+# Step 2b: Pre-deploy database snapshot (safety net for migrations)
+# ----------------------------------------------------------------------
+# Creates a pg_dump BEFORE running migrations. If a migration breaks the
+# database, we can restore to this exact point. Tagged with the git SHA
+# so each deployment has a named snapshot.
+#
+# This runs ONLY on the Swarm manager (rishi-1) — same check as migrations.
+# Zero downtime: pg_dump reads without blocking writes.
+# Storage: s3://rishi-yral/<PROJECT_REPO>/pre-deploy/<DATE>_<SHA>.sql.gz
+if [ "${WITH_DATABASE:-true}" = "true" ] && docker node ls >/dev/null 2>&1; then
+    PATRONI_C=$(docker ps -qf "name=${SWARM_STACK}_patroni-rishi" 2>/dev/null | head -1)
+    if [ -n "$PATRONI_C" ]; then
+        PG_PASS=$(docker exec "$PATRONI_C" cat /run/secrets/postgres_password 2>/dev/null || echo "")
+        SNAPSHOT_NAME="$(date +%Y%m%d_%H%M%S)_${IMAGE_TAG:0:12}"
+        SNAPSHOT_KEY="${PROJECT_REPO}/pre-deploy/${SNAPSHOT_NAME}.sql.gz"
+
+        echo "==> Creating pre-deploy snapshot: ${SNAPSHOT_NAME}"
+        # pg_dump via HAProxy → gzip → upload to S3 inside the backup container
+        docker exec -e PGPASSWORD="$PG_PASS" "$PATRONI_C" \
+            pg_dump -h haproxy-rishi-1 -U postgres -d "${POSTGRES_DB}" \
+            --no-owner --no-privileges 2>/dev/null \
+            | gzip -1 \
+            | docker run --rm -i \
+                --network "${OVERLAY_NETWORK}" \
+                -e MC_HOST_backup="https://${BACKUP_S3_ACCESS_KEY:-}:${BACKUP_S3_SECRET_KEY:-}@hel1.your-objectstorage.com" \
+                ghcr.io/dolr-ai/${PROJECT_REPO}-backup:latest \
+                mc pipe "backup/${BACKUP_S3_BUCKET}/${SNAPSHOT_KEY}" \
+            && echo "    ✓ pre-deploy snapshot saved to s3://${BACKUP_S3_BUCKET}/${SNAPSHOT_KEY}" \
+            || echo "    ⚠ pre-deploy snapshot failed (non-fatal — continuing deploy)"
+
+        # Cleanup: keep only last 10 pre-deploy snapshots
+        docker run --rm \
+            --network "${OVERLAY_NETWORK}" \
+            -e MC_HOST_backup="https://${BACKUP_S3_ACCESS_KEY:-}:${BACKUP_S3_SECRET_KEY:-}@hel1.your-objectstorage.com" \
+            ghcr.io/dolr-ai/${PROJECT_REPO}-backup:latest \
+            sh -c "mc ls backup/${BACKUP_S3_BUCKET}/${PROJECT_REPO}/pre-deploy/ | head -n -10 | awk '{print \$NF}' | while read f; do mc rm backup/${BACKUP_S3_BUCKET}/${PROJECT_REPO}/pre-deploy/\$f; done" \
+            2>/dev/null || true
+    fi
+fi
+
+# ----------------------------------------------------------------------
 # Step 3: Run pending SQL migrations BEFORE starting the new app container
 # ----------------------------------------------------------------------
 # WHY BEFORE, NOT AFTER?

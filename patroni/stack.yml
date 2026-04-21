@@ -87,6 +87,13 @@ services:
       # (a script that runs once when the cluster is first created).
       POSTGRES_DB: ${POSTGRES_DB}
 
+      # S3 credentials for WAL archiving (Point-In-Time Recovery).
+      # The archive-to-s3.sh script uses these to upload WAL files.
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-rishi-yral}
+      PROJECT_REPO: ${PROJECT_REPO:-yral-chat-ai}
+
     # SECRETS: sensitive values mounted as files at /run/secrets/ inside the container.
     # These are Docker Swarm secrets (defined at the bottom of this file).
     secrets:
@@ -156,6 +163,11 @@ services:
       PATRONI_REWIND_USERNAME: rewind_user
       # Same database name
       POSTGRES_DB: ${POSTGRES_DB}
+      # S3 credentials for WAL archiving
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-rishi-yral}
+      PROJECT_REPO: ${PROJECT_REPO:-yral-chat-ai}
     # Same secrets — all nodes need the same passwords to authenticate with each other
     secrets:
       - postgres_password
@@ -200,6 +212,11 @@ services:
       PATRONI_REWIND_USERNAME: rewind_user
       # Same database name
       POSTGRES_DB: ${POSTGRES_DB}
+      # S3 credentials for WAL archiving
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-rishi-yral}
+      PROJECT_REPO: ${PROJECT_REPO:-yral-chat-ai}
     # Same secrets
     secrets:
       - postgres_password

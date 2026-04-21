@@ -203,6 +203,17 @@ while IFS= read -r FILE; do
     # Re-find the Patroni container and password (in case of restart during migration)
     LOCAL_C=$(find_local_patroni)
     PG_PASS=$(docker exec "$LOCAL_C" cat /run/secrets/postgres_password 2>/dev/null || echo "")
+
+    # Create a named restore point BEFORE the migration.
+    # If WAL archiving is enabled, this creates a labeled waypoint that
+    # you can restore to using PITR (Point-In-Time Recovery).
+    # If WAL archiving is NOT enabled, this is a harmless no-op.
+    docker exec -i -e PGPASSWORD="$PG_PASS" "$LOCAL_C" \
+        psql -h "${HAPROXY_HOST}" -U postgres -d "${POSTGRES_DB}" -tAc \
+        "SELECT pg_create_restore_point('pre-migration-${BASENAME}');" 2>/dev/null \
+        && echo "[migrations]   restore point: pre-migration-${BASENAME}" \
+        || echo "[migrations]   restore point failed (non-fatal)"
+
     # Run the migration inside a TRANSACTION.
     # A transaction means: either ALL the SQL succeeds, or NONE of it takes effect.
     # If the migration has a bug, the database stays unchanged (no partial damage).
