@@ -80,7 +80,12 @@ services:
       # plenty for tight P95. 0.05 profiles: occasional flame-graph samples
       # without burning the profiling pipeline continuously.
       # If CPU pressure returns, drop both further (or open inbound filters first).
-      SENTRY_TRACES_RATE: "0.5"
+      # Bumped 0.5 → 1.0 on 2026-04-22 after the CPU-pressure fix settled:
+      # rishi-3 steady-state CPU sat at ~14 % after profile-rate cut, mem
+      # bump, and inbound-filter enabling. Going back to full transaction
+      # sampling so the Performance tab shows every HTTP request.
+      # Rollback to 0.5 by editing this line if CPU returns to pressure.
+      SENTRY_TRACES_RATE: "1.0"
       SENTRY_PROFILES_RATE: "0.05"
       PROJECT_REPO: ${PROJECT_REPO}
       # --- AI / LLM ---
