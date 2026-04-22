@@ -74,6 +74,14 @@ services:
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_RELEASE: ${IMAGE_TAG:-unknown}
       SENTRY_ENVIRONMENT: production
+      # Sample-rate overrides (added 2026-04-22 to relieve rishi-3 CPU).
+      # Errors are ALWAYS 100 % — these only affect transactions + profiles.
+      # 0.5 transactions: keeps ~90 samples/min per service at current traffic,
+      # plenty for tight P95. 0.05 profiles: occasional flame-graph samples
+      # without burning the profiling pipeline continuously.
+      # If CPU pressure returns, drop both further (or open inbound filters first).
+      SENTRY_TRACES_RATE: "0.5"
+      SENTRY_PROFILES_RATE: "0.05"
       PROJECT_REPO: ${PROJECT_REPO}
       # --- AI / LLM ---
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
