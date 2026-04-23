@@ -56,3 +56,4 @@ venv/
 .vscode/      # VS Code settings
 *.swp         # Vim swap files (temporary editor backups)
 .DS_Store
+/.venv-fix/

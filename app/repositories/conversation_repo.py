@@ -22,20 +22,53 @@ def _row_to_dict(row) -> dict:
 
 async def create(pool, user_id: str, influencer_id: str) -> dict:
     """
-    Create a new conversation between a user and an AI influencer.
+    Create a new conversation between a user and an AI influencer, or
+    return the existing one if another request raced ahead.
 
-    Generates a UUID for the conversation ID. Returns the created
-    conversation joined with influencer info.
+    WHY ON CONFLICT: the route handler does a get_existing() check
+    BEFORE calling this, but two concurrent POST /conversations from
+    the same user for the same influencer (mobile retry, double-tap,
+    two signed-in clients) can both pass that check before either
+    INSERT lands. Without this guard, the second INSERT trips the
+    `idx_unique_user_influencer` unique index and raises
+    UniqueViolationError → 500. Observed once in prod already
+    (Sentry issue #5, 2026-04-23).
+
+    WHY the `WHERE influencer_id IS NOT NULL` predicate: that unique
+    index is PARTIAL (see migrations/002_chat_schema.sql lines 94-95;
+    the predicate exists so human-chat conversations — which set
+    participant_b_id instead of influencer_id — don't share the AI
+    uniqueness domain). Postgres only matches a partial index as the
+    ON CONFLICT arbiter when the same predicate is repeated here.
+    Without it: ERROR "there is no unique or exclusion constraint
+    matching the ON CONFLICT specification" at runtime.
     """
     conversation_id = str(uuid.uuid4())
-    await pool.execute(
+    row = await pool.fetchrow(
         """
         INSERT INTO conversations (id, user_id, influencer_id)
         VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, influencer_id) WHERE influencer_id IS NOT NULL
+        DO NOTHING
+        RETURNING id
         """,
         conversation_id, user_id, influencer_id,
     )
-    return await get_by_id(pool, conversation_id)
+    if row is None:
+        # Race path: another request inserted first. Return their row
+        # so the caller sees the same shape as the non-race branch.
+        existing = await get_existing(pool, user_id, influencer_id)
+        if existing is None:
+            # Unreachable under normal txn isolation: we just saw a
+            # conflict on the unique index, so a committed row must
+            # exist. Surfacing loudly beats returning None and 500ing
+            # downstream when the caller dereferences conv["id"].
+            raise RuntimeError(
+                f"ON CONFLICT matched but no row found for "
+                f"user_id={user_id} influencer_id={influencer_id}"
+            )
+        return existing
+    return await get_by_id(pool, row["id"])
 
 
 async def get_by_id(pool, conversation_id: str) -> dict | None:
