@@ -27,6 +27,7 @@
 # ---------------------------------------------------------------------------
 
 import jwt  # PyJWT library — decodes JWT tokens
+import sentry_sdk  # for tagging each transaction with the authenticated principal
 from fastapi import Request, HTTPException
 
 from config import EXPECTED_ISSUERS
@@ -132,6 +133,22 @@ def get_current_user(request: Request) -> str:
         )
 
     # ---------------------------------------------------------------
-    # STEP 6: Return the user's principal ID
+    # STEP 6: Tag the current Sentry transaction with this user's principal
+    # ---------------------------------------------------------------
+    # WHY: Without this, Sentry's Insights/Backend dashboard shows "0 users"
+    # because every event is anonymous. With set_user, every transaction
+    # (and any errors raised during it) carries user.id = principal, so:
+    #   - The Users panel in Sentry actually populates.
+    #   - We can filter transactions per-principal to diagnose "user X says
+    #     chat is slow" complaints against real p50/p95/p99 data, instead of
+    #     guessing from fleet-wide baselines.
+    # SAFE: set_user is a no-op when Sentry isn't initialized (e.g., in
+    #   local dev with no SENTRY_DSN), so this line doesn't affect local.
+    # PRIVACY: we only send the principal ID (what we already use in our
+    #   own logs and DB); no email, no username.
+    sentry_sdk.set_user({"id": user_id})
+
+    # ---------------------------------------------------------------
+    # STEP 7: Return the user's principal ID
     # ---------------------------------------------------------------
     return user_id
