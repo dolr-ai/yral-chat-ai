@@ -37,6 +37,26 @@ on:
     branches:
       - main
 
+# CONCURRENCY: serialize Build-and-Deploy runs.
+# Two rapid merges to main previously raced each other on rishi-2
+# (docker daemon rejected the second `docker compose up` with
+# 'Container name "/..._yral-chat-ai" is already in use' while the
+# first was still recreating the container). The failing run then
+# auto-rolled back and left rishi-2 on the older image, so we had a
+# temporary split-brain between rishi-1 and rishi-2 until someone
+# noticed + rerun.
+#
+# group: a single string — all runs in the same group are serialized.
+# "build-and-deploy" is stable across every push to main.
+#
+# cancel-in-progress: false — do NOT cancel a running deploy when a
+# new one queues. Cancelling mid-compose-up could leave a node with
+# a half-recreated container. Queue the new run instead; it will
+# start after the current one finishes (success OR failure).
+concurrency:
+  group: build-and-deploy
+  cancel-in-progress: false
+
 # JOBS: the individual tasks that make up the pipeline.
 # Jobs run in parallel by default, unless they have "needs:" dependencies.
 jobs:
