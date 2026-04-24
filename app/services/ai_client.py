@@ -84,13 +84,22 @@ _MAX_IMAGE_BYTES = 5 * 1024 * 1024
 _IMAGE_DOWNLOAD_TIMEOUT = 5.0  # seconds
 
 
-async def _fetch_and_encode_image(url: str) -> dict:
+async def _fetch_image_bytes_and_mime(url: str) -> tuple[str, bytes] | tuple[None, str]:
     """
-    Download an image URL and return a Gemini `inlineData` part.
+    Download an image and return (mime, bytes) — or (None, reason) on failure.
 
-    Returns a `{"text": "..."}` placeholder on failure so the chat still
-    works for the text portion — Gemini will at least know an image was
-    attached even if we can't load it.
+    Shared by both the Gemini-native image path (`_fetch_and_encode_image`)
+    and the OpenAI-compat image path used for OpenRouter
+    (`_fetch_and_encode_image_openai`). Any future image source should reuse
+    this helper — keeping the presigned-URL resolution + size cap + mime
+    detection + download in one place avoids the class of bug where one
+    path got fixed and the other didn't (e.g., Sentry issue #12 2026-04-24:
+    OpenRouter path was still passing raw S3 keys while Gemini-native path
+    was already base64-inlining).
+
+    Returns:
+        On success: (mime:str, bytes)          e.g. ("image/jpeg", b"...")
+        On failure: (None, reason:str)         e.g. (None, "missing"|"too large"|"empty"|"failed to load")
     """
     # The mobile app sends back the S3 storage KEY (e.g. "user-id/uuid.jpg"),
     # not the presigned URL, in `media_urls`. Convert it before fetching.
@@ -100,7 +109,7 @@ async def _fetch_and_encode_image(url: str) -> dict:
         presigned = _storage.generate_presigned_url(url)
         if not presigned:
             logger.warning(f"No presigned URL for storage key {url[:80]}")
-            return {"text": "[image attachment — missing]"}
+            return (None, "missing")
         url = presigned
 
     try:
@@ -114,21 +123,57 @@ async def _fetch_and_encode_image(url: str) -> dict:
             resp.raise_for_status()
     except Exception as e:
         logger.warning(f"Image fetch failed for {url[:80]}: {e}")
-        return {"text": "[image attachment — failed to load]"}
+        return (None, "failed to load")
 
     data = resp.content
     if len(data) > _MAX_IMAGE_BYTES:
         logger.warning(f"Image too large ({len(data)} bytes > {_MAX_IMAGE_BYTES}); dropping")
-        return {"text": "[image attachment — too large]"}
+        return (None, "too large")
     if not data:
-        return {"text": "[image attachment — empty]"}
+        return (None, "empty")
 
     # Prefer Content-Type from response; fall back to a safe default.
     mime = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
     if not mime.startswith("image/"):
         mime = "image/jpeg"
 
+    return (mime, data)
+
+
+async def _fetch_and_encode_image(url: str) -> dict:
+    """
+    Download an image URL and return a Gemini `inlineData` part.
+
+    Returns a `{"text": "..."}` placeholder on failure so the chat still
+    works for the text portion — Gemini will at least know an image was
+    attached even if we can't load it.
+    """
+    mime, data = await _fetch_image_bytes_and_mime(url)
+    if mime is None:
+        return {"text": f"[image attachment — {data}]"}
     return {"inlineData": {"mimeType": mime, "data": base64.b64encode(data).decode("ascii")}}
+
+
+async def _fetch_and_encode_image_openai(url: str) -> dict:
+    """
+    Download an image URL and return an OpenAI-chat-completions content part.
+
+    OpenAI's chat API accepts `image_url` with either a URL or a base64
+    `data:` URL. We inline as base64 for the same reasons we do on the
+    Gemini-native path — OpenRouter forwards to the underlying provider
+    (often Gemini via a different endpoint), and historically Gemini has
+    been unreliable at fetching remote URLs. Inlining bytes is the only
+    way to guarantee the model actually sees the image.
+
+    PR ref: Sentry issue #12 (2026-04-24) — the OpenRouter path was
+    passing raw S3 storage keys as `image_url.url`, which Google rejected
+    with `400 Invalid URL format: ...`.
+    """
+    mime, data = await _fetch_image_bytes_and_mime(url)
+    if mime is None:
+        return {"type": "text", "text": f"[image attachment — {data}]"}
+    b64 = base64.b64encode(data).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
 
 
 async def _build_gemini_contents(
@@ -299,9 +344,20 @@ async def _call_gemini(
 # CORE FUNCTION: Generate AI Response
 # ---------------------------------------------------------------------------
 
-def _build_user_content(text: str | None, media_urls: list[str] | None) -> str | list:
+async def _build_user_content(text: str | None, media_urls: list[str] | None) -> str | list:
     """
     Build the content payload for OpenAI-format messages (used by OpenRouter).
+
+    For each image URL/storage-key in `media_urls`, downloads it and
+    inlines as a base64 `data:` URL — the same strategy used on the
+    Gemini-native path. Previously this function passed raw URLs, which
+    broke for two reasons:
+    (1) Mobile clients send back the S3 STORAGE KEY, not a presigned URL,
+        so the "URL" passed to OpenRouter was a bare key like
+        "<user>/<uuid>.jpg" which Google rejected with 400 Invalid URL
+        (Sentry issue #12 2026-04-24).
+    (2) Even when passed a real URL, Gemini (via OpenRouter's OpenAI-compat
+        layer) has historically been unreliable at fetching remote URLs.
     """
     if not media_urls:
         return text or ""
@@ -311,10 +367,7 @@ def _build_user_content(text: str | None, media_urls: list[str] | None) -> str |
         parts.append({"type": "text", "text": text})
 
     for url in media_urls[:5]:
-        parts.append({
-            "type": "image_url",
-            "image_url": {"url": url},
-        })
+        parts.append(await _fetch_and_encode_image_openai(url))
 
     return parts if parts else (text or "")
 
@@ -361,11 +414,11 @@ async def generate_response(
                                 msg_media = json.loads(msg_media)
                             except (json.JSONDecodeError, TypeError):
                                 msg_media = None
-                        messages.append({"role": "user", "content": _build_user_content(content, msg_media)})
+                        messages.append({"role": "user", "content": await _build_user_content(content, msg_media)})
                     else:
                         messages.append({"role": "assistant", "content": content or ""})
 
-                messages.append({"role": "user", "content": _build_user_content(user_message, media_urls)})
+                messages.append({"role": "user", "content": await _build_user_content(user_message, media_urls)})
 
                 response = await client.chat.completions.create(
                     model=config.OPENROUTER_MODEL,
