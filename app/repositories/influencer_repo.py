@@ -202,6 +202,22 @@ async def list_trending(pool, limit: int = 50, offset: int = 0) -> list[dict]:
     List trending influencers, ordered by message count (popularity).
 
     Trending = most messages received from users. Only active influencers.
+
+    PERFORMANCE NOTE (2026-04-27):
+        This query reads from the `influencer_trending_stats` materialized
+        view (see migrations/003_*.sql). The view is refreshed every
+        15 min by a background task in app/main.py.
+
+        The previous correlated-subquery implementation had a P95 of ~6.7s
+        on 3M+ messages — Postgres couldn't push the LIMIT past the sort
+        because the sort key was a computed aggregate. The materialized
+        view collapses that to an indexed lookup.
+
+        Trending data is therefore stale by up to 15 minutes. Acceptable
+        for the UX (users can't tell "trending right now" from "trending
+        14 min ago"). If we ever need real-time trending, the upgrade
+        path is incremental counter columns on ai_influencers — but that
+        adds write-path complexity that we don't currently need.
     """
     rows = await pool.fetch(
         """
@@ -210,13 +226,10 @@ async def list_trending(pool, limit: int = 50, offset: int = 0) -> list[dict]:
                i.initial_greeting, i.suggested_messages,
                i.is_active, i.is_nsfw, i.parent_principal_id, i.source,
                i.created_at, i.updated_at, i.metadata,
-               (SELECT COUNT(c.id) FROM conversations c
-                WHERE c.influencer_id = i.id) as conversation_count,
-               (SELECT COUNT(m.id)
-                FROM conversations c
-                JOIN messages m ON c.id = m.conversation_id
-                WHERE c.influencer_id = i.id AND m.role = 'user') as message_count
+               COALESCE(s.conversation_count, 0) AS conversation_count,
+               COALESCE(s.message_count, 0)      AS message_count
         FROM ai_influencers i
+        LEFT JOIN influencer_trending_stats s ON s.influencer_id = i.id
         WHERE i.is_active = 'active'
         ORDER BY message_count DESC, i.created_at DESC
         LIMIT $1 OFFSET $2

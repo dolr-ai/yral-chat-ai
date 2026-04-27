@@ -24,6 +24,7 @@
 # PORTED FROM: yral-ai-chat/src/main.rs
 # ---------------------------------------------------------------------------
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -113,14 +114,88 @@ async def lifespan(app: FastAPI):
         # the pool will retry on the first real request.
         logger.error(f"Failed to initialize database pool at startup: {e}")
 
+    # Start the background task that keeps the influencer_trending_stats
+    # materialized view fresh. It does an initial REFRESH (so the empty
+    # view from migration 003 gets populated within 1-2 min of app boot),
+    # then refreshes CONCURRENTLY every 15 min thereafter. See
+    # _trending_stats_refresher() docstring below for the full rationale.
+    trending_refresher_task = asyncio.create_task(_trending_stats_refresher())
+
     # "yield" means: "startup is done, start serving requests."
     # Everything after yield runs when the app is shutting down.
     yield
 
     # --- SHUTDOWN ---
     logger.info("Shutting down...")
+    trending_refresher_task.cancel()
+    try:
+        await trending_refresher_task
+    except asyncio.CancelledError:
+        pass
     await database.close_pool()
     logger.info("Shutdown complete")
+
+
+# ---------------------------------------------------------------------------
+# BACKGROUND TASK: refresh the influencer_trending_stats materialized view
+# ---------------------------------------------------------------------------
+async def _trending_stats_refresher():
+    """Keep the influencer_trending_stats materialized view fresh.
+
+    Background task launched by the lifespan startup. Runs forever (or
+    until the lifespan shutdown cancels it).
+
+    SCHEDULE:
+      - First run: REFRESH (no CONCURRENTLY) — needed because right after
+        migration 003 the view exists but has zero rows; a CONCURRENT
+        refresh requires existing data to compute the diff against.
+        First run holds an exclusive lock on the view for ~30s-2min;
+        list_trending requests during that window get an empty list
+        (LEFT JOIN + COALESCE 0). Acceptable cold start.
+      - Every 15 min thereafter: REFRESH CONCURRENTLY — re-computes
+        without blocking concurrent reads.
+
+    BOTH RISHI-1 AND RISHI-2 RUN THIS TASK:
+      Each app replica has its own loop. They'll race on the periodic
+      refresh — Postgres handles this via row-level locking on the view's
+      MV-tracking tables. The losing replica's REFRESH waits for the
+      winner, then immediately runs again (no-op-ish — it just sees the
+      already-refreshed state). Wastes a few CPU-seconds every 15 min;
+      not worth the complexity of an advisory-lock dedup at our scale.
+
+    ON FAILURE:
+      Refresh failures are logged at error level (so Sentry catches them)
+      but never crash the app. The view will be stale until the next
+      successful refresh or a manual `REFRESH MATERIALIZED VIEW
+      influencer_trending_stats` from psql.
+    """
+    REFRESH_INTERVAL_SEC = 15 * 60  # 15 minutes
+
+    # First run: empty view → must be NOT CONCURRENTLY.
+    # Wrap in try so a failure here doesn't abort the loop forever.
+    try:
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("REFRESH MATERIALIZED VIEW influencer_trending_stats")
+        logger.info("influencer_trending_stats: initial refresh complete")
+    except Exception:
+        logger.exception("influencer_trending_stats: initial refresh failed (will retry on next interval)")
+
+    # Subsequent runs: CONCURRENTLY so reads aren't blocked.
+    while True:
+        await asyncio.sleep(REFRESH_INTERVAL_SEC)
+        try:
+            pool = await database.get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "REFRESH MATERIALIZED VIEW CONCURRENTLY influencer_trending_stats"
+                )
+            logger.info("influencer_trending_stats: concurrent refresh complete")
+        except Exception:
+            # Log + continue. Sentry's logging integration sends this
+            # to Sentry as an error event so we notice if refreshes
+            # silently start failing.
+            logger.exception("influencer_trending_stats: concurrent refresh failed")
 
 
 # ---------------------------------------------------------------------------
