@@ -24,7 +24,7 @@
 
 from enum import Enum
 from typing import Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 # =========================================================================
@@ -97,8 +97,18 @@ class CreateInfluencerRequest(BaseModel):
 
 
 class GeneratePromptRequest(BaseModel):
-    """Request to generate system instructions from a short concept."""
-    concept: str
+    """Request to generate system instructions from a short concept.
+
+    The wire-level field name is ambiguous because of a migration from the
+    old Rust `yral-ai-chat` service (which used some other shape) to this
+    Python service. The current production mobile app (Android + iOS, KMM
+    shared code) sends `{"prompt": "..."}` while the backend canonical
+    name is `concept`. Until mobile ships a fix and old app versions age
+    out, accept BOTH names on input. Backend code keeps using
+    `body.concept` — `validation_alias` only affects parsing the inbound
+    body, not the field's Python attribute name.
+    """
+    concept: str = Field(validation_alias=AliasChoices("concept", "prompt"))
     language: Optional[str] = None
 
 
@@ -108,8 +118,18 @@ class GeneratePromptResponse(BaseModel):
 
 
 class ValidateAndGenerateRequest(BaseModel):
-    """Request to validate a concept and generate all metadata."""
-    concept: str
+    """Request to validate a concept and generate all metadata.
+
+    Same backwards-compat story as GeneratePromptRequest: mobile DTO
+    `ValidateAndGenerateMetadataRequestDto` (in
+    yral-mobile/shared/features/aiInfluencer/.../models/) sends
+    `{"system_instructions": "..."}` to this endpoint, while the backend
+    canonical name is `concept`. Accept both names. Mobile will rename
+    when convenient; backend doesn't gate on it.
+    """
+    concept: str = Field(
+        validation_alias=AliasChoices("concept", "system_instructions"),
+    )
     language: Optional[str] = None
 
 
