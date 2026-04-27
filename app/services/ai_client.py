@@ -318,10 +318,24 @@ async def _call_gemini(
 
     data = response.json()
 
-    # Extract text from response
+    # Extract text from response.
+    #
+    # Gemini returns no `candidates` when the safety filter blocks the
+    # input (most common cause) or when an upstream model error occurs.
+    # The reason lives in `promptFeedback.blockReason`. Surfacing it lets
+    # us tell apart safety-block (expected for some prompts) from
+    # quota / rate-limit / provider issues (actionable) when looking at
+    # Sentry. Sentry issue #3 (~26 affected users, 2026-04-27) was
+    # firing as a generic "No candidates" — the diagnostic below makes
+    # the real cause visible without changing user-facing behavior.
     candidates = data.get("candidates", [])
     if not candidates:
-        raise ValueError("No candidates in Gemini response")
+        feedback = data.get("promptFeedback") or {}
+        block_reason = feedback.get("blockReason", "UNKNOWN")
+        raise ValueError(
+            f"Gemini returned no candidates "
+            f"(blockReason={block_reason}, model={config.GEMINI_MODEL})"
+        )
 
     parts = candidates[0].get("content", {}).get("parts", [])
     response_text = ""
@@ -330,6 +344,18 @@ async def _call_gemini(
             response_text += part["text"]
 
     response_text = response_text.strip()
+
+    # A candidate can come back with finishReason=SAFETY (or MAX_TOKENS,
+    # RECITATION, etc.) and no `content.parts` — meaning the model started
+    # responding then got cut off. Treating that as a successful empty
+    # response would surface a blank message to the user, which is worse
+    # than the FALLBACK_ERROR_MESSAGE the caller emits on exception.
+    if not response_text:
+        finish_reason = candidates[0].get("finishReason", "UNKNOWN")
+        raise ValueError(
+            f"Gemini returned candidate with no text "
+            f"(finishReason={finish_reason}, model={config.GEMINI_MODEL})"
+        )
 
     # Extract token count
     usage = data.get("usageMetadata", {})
@@ -427,7 +453,26 @@ async def generate_response(
                     temperature=config.OPENROUTER_TEMPERATURE,
                 )
 
-                response_text = response.choices[0].message.content or ""
+                # OpenRouter is a proxy in front of many providers and
+                # occasionally returns a 200 OK whose body has `choices=None`
+                # (the underlying provider misbehaved in a way the OpenAI
+                # SDK silently accepts). The bare `response.choices[0]`
+                # then raises 'NoneType' object is not subscriptable —
+                # the cryptic message that drove Sentry issue #2
+                # (~2,839 events, 15 users, 2026-04-24). The defensive
+                # parse below promotes the failure to a typed error
+                # carrying the model name + response id, so the
+                # except-clause below falls through to the Gemini
+                # backup path with actionable context.
+                choices = response.choices or []
+                if not choices:
+                    raise RuntimeError(
+                        f"OpenRouter returned no choices "
+                        f"(model={config.OPENROUTER_MODEL}, "
+                        f"id={getattr(response, 'id', '?')})"
+                    )
+                message = choices[0].message
+                response_text = (message.content if message else None) or ""
                 response_text = response_text.strip()
 
                 token_count = 0
