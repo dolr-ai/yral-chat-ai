@@ -173,6 +173,76 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
+# 4XX VALIDATION CAPTURE TO SENTRY
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS:
+#   FastAPI's default behavior for body-validation errors (Pydantic
+#   schema mismatches) is to raise RequestValidationError → catch it
+#   internally → return a 422 JSON response. The exception NEVER
+#   propagates out of the framework, so Sentry's FastAPI integration
+#   (which only catches escaped exceptions) doesn't see these failures.
+#
+#   That blind spot bit us 2026-04-27: every "Create AI Influencer"
+#   call from the mobile app was 422-ing at /influencers/generate-prompt
+#   because mobile sent {"prompt": "..."} but the schema requires
+#   {"concept": "..."}. Hundreds of failed calls per hour, NONE of them
+#   visible in Sentry. Found via Firebase Crashlytics + chat-ai access
+#   logs after the fact.
+#
+# WHAT THIS HANDLER DOES:
+#   On every RequestValidationError (i.e., every 422), capture a
+#   warning-level event to Sentry with the request path, method, the
+#   validation failures, and the offending body input. Then let
+#   FastAPI's default JSON 422 response continue downstream — we don't
+#   change the wire response, we just add observability.
+#
+# DESIGN NOTES:
+#   - level="warning" not "error". 422s are bad-client behaviour, not
+#     server bugs — won't trip alerting thresholds tuned for real errors.
+#   - Group by path+method via fingerprint so a wave of identical bad
+#     requests collapses to a single Sentry issue, not 10,000 separate
+#     events.
+#   - exc.errors() includes the offending input (Pydantic v2). That's
+#     exactly what we need to see what mobile / web is sending wrong.
+#     Note: send_default_pii=False in init_sentry, so no other request
+#     PII (auth headers, query params) attaches by default.
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+import sentry_sdk
+
+
+@app.exception_handler(RequestValidationError)
+async def sentry_capture_validation_error(request: Request, exc: RequestValidationError):
+    # Set rich context BEFORE capture so Sentry has it on the event.
+    with sentry_sdk.new_scope() as scope:
+        scope.set_tag("http.status_code", "422")
+        scope.set_tag("http.method", request.method)
+        scope.set_tag("http.route", request.url.path)
+        # Group all 422s on the same path+method together (collapses
+        # noise from a misconfigured client into one issue).
+        scope.fingerprint = ["422", request.method, request.url.path]
+        scope.set_context(
+            "validation",
+            {
+                "path": str(request.url.path),
+                "method": request.method,
+                "errors": exc.errors(),
+            },
+        )
+        sentry_sdk.capture_message(
+            f"422 {request.method} {request.url.path}",
+            level="warning",
+        )
+
+    # Preserve FastAPI's default 422 response shape so existing clients
+    # (mobile, web, integrations) keep parsing the response identically.
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
+
+
+# ---------------------------------------------------------------------------
 # AUTH TEST ENDPOINT
 # ---------------------------------------------------------------------------
 
