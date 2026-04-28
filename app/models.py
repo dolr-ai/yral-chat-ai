@@ -140,6 +140,7 @@ class ValidateAndGenerateResponse(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     system_instructions: Optional[str] = None
+    avatar_url: Optional[str] = None
     initial_greeting: Optional[str] = None
     suggested_messages: Optional[list[str]] = None
     personality_traits: Optional[dict] = None

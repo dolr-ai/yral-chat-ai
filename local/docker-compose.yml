@@ -195,6 +195,11 @@ services:
       SENTRY_DSN: ""
       SENTRY_RELEASE: local-dev
       SENTRY_ENVIRONMENT: local
+      # Optional API keys for local dev. Sourced from ../.env.local (gitignored)
+      # so the influencer-creation flow can hit Gemini + Replicate end-to-end.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      REPLICATE_API_TOKEN: ${REPLICATE_API_TOKEN:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     secrets:
       - database_url
     networks:

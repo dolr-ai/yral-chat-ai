@@ -33,6 +33,7 @@ from database import get_pool
 from auth import get_current_user
 from repositories import influencer_repo
 from services import character_generator, moderation, google_chat
+from services.character_generator import GeminiSafetyBlocked
 from models import (
     InfluencerResponse, InfluencersListResponse, InfluencerDetailResponse,
     CreateInfluencerRequest, GeneratePromptRequest, GeneratePromptResponse,
@@ -226,7 +227,11 @@ async def generate_prompt(body: GeneratePromptRequest, request: Request):
     """
     get_current_user(request)  # Auth required
 
-    instructions = await character_generator.generate_system_instructions(body.concept)
+    try:
+        instructions = await character_generator.generate_system_instructions(body.concept)
+    except GeminiSafetyBlocked as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
     if not instructions:
         raise HTTPException(status_code=500, detail="Failed to generate system instructions")
 

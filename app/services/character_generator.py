@@ -18,10 +18,23 @@ import json
 import logging
 from typing import Optional
 
+import sentry_sdk
+
 from services.ai_client import _call_gemini
+from services import replicate
 import config
 
 logger = logging.getLogger(__name__)
+
+
+class GeminiSafetyBlocked(Exception):
+    """Gemini's safety filter rejected the input. Caller maps to 422 with user-friendly text."""
+    pass
+
+
+def _is_safety_block(exc: BaseException) -> bool:
+    msg = str(exc)
+    return "blockReason=" in msg or "no candidates" in msg.lower() or "finishReason=SAFETY" in msg
 
 
 # =========================================================================
@@ -124,6 +137,22 @@ System Instructions: {system_instructions}
 Return ONLY the flowing paragraph prompt. Do not use bullet points or labels."""
 
 
+# Permissive safety thresholds for the influencer-creation flow.
+#
+# WHY: Gemini's default thresholds (BLOCK_MEDIUM_AND_ABOVE) reject many
+# benign Indian-character concepts ("flirty Bollywood star", "sassy mother-in-law")
+# under PROHIBITED_CONTENT. Setting BLOCK_ONLY_HIGH still catches clearly
+# harmful generations but lets normal creative concepts through. Our own
+# `contains_safety_refusal` check + the explicit "MUST NOT be NSFW" clause
+# in VALIDATE_PROMPT remain the second layer of defense.
+_PERMISSIVE_SAFETY_SETTINGS = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+]
+
+
 # Safety refusal phrases that indicate the AI rejected the request
 SAFETY_REFUSAL_PHRASES = [
     "i cannot create", "i can't create",
@@ -162,12 +191,41 @@ async def generate_system_instructions(concept: str) -> str | None:
             system_instruction={"parts": [{"text": GENERATE_PROMPT}]},
             temperature=config.GEMINI_TEMPERATURE,
             max_tokens=config.GEMINI_MAX_TOKENS,
+            safety_settings=_PERMISSIVE_SAFETY_SETTINGS,
         )
         if contains_safety_refusal(text):
             return None
         return text.strip()
+    except ValueError as e:
+        if _is_safety_block(e):
+            raise GeminiSafetyBlocked(
+                "Your concept was flagged as inappropriate. "
+                "Try rewording without explicit, violent, or harmful themes."
+            ) from e
+        logger.exception("Failed to generate system instructions")
+        sentry_sdk.capture_exception(e)
+        return None
     except Exception as e:
-        logger.error(f"Failed to generate system instructions: {e}")
+        logger.exception("Failed to generate system instructions")
+        sentry_sdk.capture_exception(e)
+        return None
+
+
+async def _generate_avatar(image_prompt: Optional[str]) -> Optional[str]:
+    """
+    Turn Gemini's image_prompt into an actual avatar URL via Replicate.
+
+    Returns None (not raises) on any failure — avatar is optional and the
+    user can regenerate, so we never block the rest of the create flow.
+    """
+    if not image_prompt:
+        return None
+    try:
+        enhanced = f"Professional avatar portrait, high quality, {image_prompt}"
+        return await replicate.generate_image(enhanced, aspect_ratio="1:1")
+    except Exception as e:
+        logger.exception("Avatar generation failed")
+        sentry_sdk.capture_exception(e)
         return None
 
 
@@ -199,6 +257,7 @@ async def validate_and_generate_metadata(system_instructions: str) -> dict | Non
             system_instruction={"parts": [{"text": "You are a helpful assistant that returns valid JSON."}]},
             temperature=0.3,
             max_tokens=config.GEMINI_MAX_TOKENS,
+            safety_settings=_PERMISSIVE_SAFETY_SETTINGS,
         )
 
         if contains_safety_refusal(text):
@@ -207,11 +266,46 @@ async def validate_and_generate_metadata(system_instructions: str) -> dict | Non
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:
-            return json.loads(text[start:end])
+            try:
+                metadata = json.loads(text[start:end])
+            except json.JSONDecodeError as e:
+                logger.exception("Gemini returned text that looked like JSON but failed to parse")
+                sentry_sdk.set_context("gemini_response", {"raw_text_first_2000": text[:2000]})
+                sentry_sdk.capture_exception(e)
+                return None
 
+            # Generate the avatar from the image_prompt Gemini returned.
+            # Mirrors the behavior of yral-ai-chat (Rust): mobile expects
+            # avatar_url back from this endpoint so the Create-AI-Influencer
+            # screen can show a picture and POST /influencers/create with a
+            # non-empty avatar. Replicate failures degrade gracefully — the
+            # rest of the metadata still flows through and the user can
+            # retry the avatar step.
+            metadata["avatar_url"] = await _generate_avatar(metadata.get("image_prompt"))
+            return metadata
+
+        logger.warning("Gemini returned no JSON object in validate-and-generate response")
+        sentry_sdk.set_context("gemini_response", {"raw_text_first_2000": text[:2000]})
+        sentry_sdk.capture_message(
+            "validate_and_generate_metadata: Gemini returned no JSON object",
+            level="error",
+        )
+        return None
+    except ValueError as e:
+        if _is_safety_block(e):
+            return {
+                "is_valid": False,
+                "reason": (
+                    "Your concept was flagged as inappropriate. "
+                    "Try rewording without explicit, violent, or harmful themes."
+                ),
+            }
+        logger.exception("Failed to validate and generate metadata")
+        sentry_sdk.capture_exception(e)
         return None
     except Exception as e:
-        logger.error(f"Failed to validate and generate metadata: {e}")
+        logger.exception("Failed to validate and generate metadata")
+        sentry_sdk.capture_exception(e)
         return None
 
 
@@ -240,6 +334,7 @@ async def generate_initial_greeting(
             system_instruction={"parts": [{"text": "You are a helpful assistant that returns valid JSON."}]},
             temperature=0.7,
             max_tokens=config.GEMINI_MAX_TOKENS,
+            safety_settings=_PERMISSIVE_SAFETY_SETTINGS,
         )
 
         start = text.find("{")
@@ -252,7 +347,8 @@ async def generate_initial_greeting(
 
         return (fallback_greeting, fallback_suggestions)
     except Exception as e:
-        logger.error(f"Failed to generate greeting: {e}")
+        logger.exception("Failed to generate greeting")
+        sentry_sdk.capture_exception(e)
         return (fallback_greeting, fallback_suggestions)
 
 
@@ -277,8 +373,10 @@ async def generate_video_prompt(
             system_instruction={"parts": [{"text": "You are a helpful assistant."}]},
             temperature=0.7,
             max_tokens=config.GEMINI_MAX_TOKENS,
+            safety_settings=_PERMISSIVE_SAFETY_SETTINGS,
         )
         return text.strip() if text else None
     except Exception as e:
-        logger.error(f"Failed to generate video prompt: {e}")
+        logger.exception("Failed to generate video prompt")
+        sentry_sdk.capture_exception(e)
         return None

@@ -284,11 +284,16 @@ async def _call_gemini(
     system_instruction: dict | None = None,
     temperature: float = 0.7,
     max_tokens: int = 2048,
+    safety_settings: list[dict] | None = None,
 ) -> tuple[str, int]:
     """
     Call Gemini's native generateContent API.
 
     Uses ?key= query parameter for authentication (works with AQ. format keys).
+
+    `safety_settings`, when provided, overrides Gemini's default thresholds.
+    Used by the influencer-creation flow to relax PROHIBITED_CONTENT blocking
+    on benign creative concepts.
 
     RETURNS: (response_text, token_count)
     RAISES: Exception on API failure
@@ -306,6 +311,9 @@ async def _call_gemini(
     # Add system instruction if provided
     if system_instruction:
         payload["systemInstruction"] = system_instruction
+
+    if safety_settings:
+        payload["safetySettings"] = safety_settings
 
     async with httpx.AsyncClient(timeout=config.GEMINI_TIMEOUT) as http:
         response = await http.post(
