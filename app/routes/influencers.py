@@ -268,7 +268,11 @@ async def create_influencer(body: CreateInfluencerRequest, request: Request):
     3. Append safety guardrails to system instructions
     4. Generate greeting and starter messages if not provided
     5. Save to database
-    6. Return the created influencer
+    6. Generate a starter-video prompt (best-effort) so mobile can kick off
+       the welcome video. Mirrors yral-ai-chat (Rust) behavior — see
+       AiInfluencerViewModel.kt:649 in yral-mobile, which reads
+       `starter_video_prompt` and enqueues video generation when present.
+    7. Return the created influencer + starter_video_prompt
     """
     user_id = get_current_user(request)
     pool = await get_pool()
@@ -316,7 +320,13 @@ async def create_influencer(body: CreateInfluencerRequest, request: Request):
     if not created:
         raise HTTPException(status_code=500, detail="Failed to create influencer")
 
-    return _format_influencer_detail(created)
+    starter_video_prompt = await character_generator.generate_video_prompt(
+        body.display_name, body.system_instructions,
+    )
+
+    response = _format_influencer_detail(created)
+    response["starter_video_prompt"] = starter_video_prompt
+    return response
 
 
 # =========================================================================

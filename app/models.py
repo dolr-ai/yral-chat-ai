@@ -77,6 +77,9 @@ class InfluencerDetailResponse(BaseModel):
     created_at: str
     updated_at: str
     metadata: Optional[dict] = None
+    # Populated only on POST /influencers/create. Mobile reads this field
+    # to enqueue the welcome video. Other endpoints leave it null.
+    starter_video_prompt: Optional[str] = None
 
 
 class CreateInfluencerRequest(BaseModel):
