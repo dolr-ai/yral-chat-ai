@@ -123,9 +123,28 @@ docker exec caddy caddy validate --config /etc/caddy/Caddyfile || {
     exit 1
 }
 mv "${SNIPPET_TMP}" "${SNIPPET_DEST}"
+
+# ---- Also render the Metabase Caddy snippet (if the template exists) ----
+# Mirrors the same logic in scripts/ci/deploy-app.sh so Caddy-only hosts
+# (rishi-3 today) get parity with APP_SERVERS for the metabase subdomain.
+# Metabase runs on rishi-2 only, but its container is on the
+# chat-ai-db-internal swarm overlay so any Caddy on that overlay can
+# reach `yral-chat-ai-metabase` via the overlay's DNS. Services that
+# don't ship a metabase.caddy.template (most of them) skip this block.
+METABASE_DEST=""
+if [ -f "caddy/metabase.caddy.template" ]; then
+    METABASE_DEST="/home/deploy/caddy/conf.d/${PROJECT_REPO}-metabase.caddy"
+    sed -e "s|\${PROJECT_NAME}|${PROJECT_NAME}|g" \
+        -e "s|\${PROJECT_REPO}|${PROJECT_REPO}|g" \
+        caddy/metabase.caddy.template > "${METABASE_DEST}.tmp"
+    mv "${METABASE_DEST}.tmp" "${METABASE_DEST}"
+    echo "    metabase snippet written to ${METABASE_DEST}"
+fi
+
 docker exec caddy caddy validate --config /etc/caddy/Caddyfile || {
     echo "FATAL: new snippet broke Caddy config, removing"
     rm -f "${SNIPPET_DEST}"
+    [ -n "${METABASE_DEST}" ] && rm -f "${METABASE_DEST}"
     exit 1
 }
 docker exec caddy caddy reload --config /etc/caddy/Caddyfile --force
