@@ -45,8 +45,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '1.0'
+          memory: 10G
+          cpus: '4.0'
     expose:
       - "8000"
     # The app joins TWO networks:
