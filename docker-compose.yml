@@ -157,6 +157,14 @@ services:
   metabase:
     image: metabase/metabase:latest
     container_name: ${PROJECT_REPO}-metabase
+    # PROFILE-GATED — see project.config METABASE_HOST.
+    # Without `--profile analytics`, this service is IGNORED by `docker
+    # compose up -d` (existing container is left as-is, no new one is
+    # created). scripts/ci/deploy-app.sh passes the profile only on the
+    # host named in METABASE_HOST, so metabase exists on exactly one
+    # node — no more split-brain H2 databases.
+    profiles:
+      - analytics
     restart: always
     environment:
       # URL where Metabase is accessible (for generating correct links)

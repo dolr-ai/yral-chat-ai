@@ -256,10 +256,22 @@ export ADMIN_KEY_TO_DELETE_INFLUENCER="${ADMIN_KEY_TO_DELETE_INFLUENCER:-}"
 export CORS_ORIGINS="${CORS_ORIGINS:-*}"
 export GOOGLE_CHAT_WEBHOOK_URL="${GOOGLE_CHAT_WEBHOOK_URL:-}"
 
-docker compose pull
-# "docker compose up -d" starts the container in detached mode (background).
+# Compose profile selection — keeps profile-gated services (e.g. metabase)
+# pinned to the single host listed in project.config METABASE_HOST. On
+# every other host the profile flag is omitted, so `docker compose up -d`
+# brings up only the always-on services (the `app` itself) and leaves any
+# profile-gated containers untouched. This prevents the duplicate-metabase
+# split-brain bug from 2026-05-03/04.
+COMPOSE_PROFILE_ARGS=""
+if [ -n "${METABASE_HOST:-}" ] && [ "${SERVER_NAME}" = "${METABASE_HOST}" ]; then
+    echo "    this host (${SERVER_NAME}) is METABASE_HOST — enabling --profile analytics"
+    COMPOSE_PROFILE_ARGS="--profile analytics"
+fi
+
+docker compose ${COMPOSE_PROFILE_ARGS} pull
+# "docker compose up -d" starts the container(s) in detached mode (background).
 # If a container is already running, this replaces it with the new image.
-docker compose up -d
+docker compose ${COMPOSE_PROFILE_ARGS} up -d
 
 # ----------------------------------------------------------------------
 # Step 5: Wait for the health check to pass (up to 90 seconds)
@@ -454,8 +466,10 @@ fi
 # Re-deploy the last known good (or previous) image.
 # We override IMAGE_TAG with the rollback tag so docker-compose.yml pulls
 # the old image instead of the broken new one.
+# Pass through the same compose profile selection as the canary above so
+# rollback on the METABASE_HOST keeps metabase running too.
 echo "==> Re-deploying ${ROLLBACK_TAG}"
-IMAGE_TAG="${ROLLBACK_TAG}" docker compose up -d
+IMAGE_TAG="${ROLLBACK_TAG}" docker compose ${COMPOSE_PROFILE_ARGS} up -d
 
 # Wait for the rolled-back container to become healthy (up to 60 seconds).
 # It SHOULD be healthy since it was working before, but we verify anyway.
