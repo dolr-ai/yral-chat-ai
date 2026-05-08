@@ -339,6 +339,22 @@ done
 # racing case we recover within ~9-15s instead of falsely auto-rolling
 # back a perfectly good deploy.
 if [ "${HEALTHY}" = "1" ]; then
+    # PRE-CHECK RELOAD (added 2026-05-08 after PR #30's retry-loop alone
+    # was insufficient — three deploys in a row hit the same failure for
+    # the full 18-second retry window). Caddy resolves the upstream alias
+    # `${PROJECT_REPO}-${SERVER_NAME}:8000` (set in docker-compose.yml's
+    # `aliases:` block) via Docker's embedded DNS, but Caddy's DNS
+    # resolver caches results — and the cache can outlive a container
+    # recreate, leaving Caddy pointing at the now-dead old container's
+    # IP for longer than our 18s retry budget.
+    #
+    # `caddy reload` re-resolves every upstream hostname from scratch and
+    # clears the upstream-health state machine, giving the round-trip
+    # check below a clean slate. Reload is graceful (no in-flight
+    # requests are dropped) and idempotent — the SAME command already
+    # runs on every successful deploy after this block, so we are not
+    # widening the surface area, only running it earlier.
+    docker exec caddy caddy reload --config /etc/caddy/Caddyfile --force 2>/dev/null || true
     # Track whether ANY attempt succeeded across the retry loop.
     ROUND_TRIP_OK=0
     # Up to 6 attempts × 3-second spacing = 18 seconds worst case.
