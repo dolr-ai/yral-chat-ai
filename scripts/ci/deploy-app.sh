@@ -322,14 +322,51 @@ done
 # through Caddy (the reverse proxy). This catches cases where Docker thinks
 # the container is healthy but Caddy can't reach it (network misconfiguration,
 # Caddy crash, etc.). Caddy is what Cloudflare actually talks to.
+#
+# WHY WE RETRY (added 2026-05-08 after PR #29 deploy hit this race):
+# When `docker compose up -d` recreates the container, the OLD container is
+# stopped first. Caddy's active health probe is configured with
+# `health_interval 2s, fail_duration 10s, max_fails 2` (see
+# caddy/snippet.caddy.template). The old container's stop window produces
+# enough failed probes to push the upstream into Caddy's 10-second passive-
+# fail quarantine. Meanwhile the new container reports healthy in ~6s — so
+# if we check the round-trip immediately, we race the quarantine timer and
+# the single curl returns 502 even though the new container is fine.
+#
+# Retrying up to 6 times with 3s spacing gives Caddy time to (a) age out
+# the quarantine and (b) re-probe the new container as healthy. In the
+# happy path the first attempt succeeds and we add zero latency. In the
+# racing case we recover within ~9-15s instead of falsely auto-rolling
+# back a perfectly good deploy.
 if [ "${HEALTHY}" = "1" ]; then
-    # curl the local Caddy with the project's Host header.
-    # -sf: silent + fail on HTTP errors.
-    # -m 5: timeout after 5 seconds.
-    # -H "Host: ...": pretend we're coming from the internet (Caddy routes by hostname).
-    # "http://localhost/health": hit the local Caddy (not the public URL).
-    if ! curl -sf -m 5 -H "Host: ${PROJECT_DOMAIN}" "http://localhost/health" >/dev/null 2>&1; then
-        echo "    docker says healthy but Caddy → app round trip FAILED"
+    # Track whether ANY attempt succeeded across the retry loop.
+    ROUND_TRIP_OK=0
+    # Up to 6 attempts × 3-second spacing = 18 seconds worst case.
+    for attempt in 1 2 3 4 5 6; do
+        # curl the local Caddy with the project's Host header.
+        # -sf: silent + fail on HTTP errors.
+        # -m 5: timeout after 5 seconds.
+        # -H "Host: ...": pretend we're coming from the internet (Caddy routes by hostname).
+        # "http://localhost/health": hit the local Caddy (not the public URL).
+        if curl -sf -m 5 -H "Host: ${PROJECT_DOMAIN}" "http://localhost/health" >/dev/null 2>&1; then
+            # Mark success so we exit the post-loop check happy-path.
+            ROUND_TRIP_OK=1
+            # Only log retry-recovery; first-try success stays silent
+            # to keep happy-path output identical to the pre-fix flow.
+            if [ "${attempt}" -gt 1 ]; then
+                echo "    Caddy → app round trip OK after ${attempt} attempts"
+            fi
+            break
+        fi
+        # Don't sleep after the last attempt — we're about to give up.
+        if [ "${attempt}" -lt 6 ]; then
+            sleep 3
+        fi
+    done
+
+    # If every attempt failed, fall through to the rollback path below.
+    if [ "${ROUND_TRIP_OK}" = "0" ]; then
+        echo "    docker says healthy but Caddy → app round trip FAILED after 6 attempts (~18s)"
         HEALTHY=0
     fi
 fi
