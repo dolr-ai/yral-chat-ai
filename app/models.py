@@ -24,7 +24,7 @@
 
 from enum import Enum
 from typing import Optional, Literal
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 
 # =========================================================================
@@ -83,7 +83,23 @@ class InfluencerDetailResponse(BaseModel):
 
 
 class CreateInfluencerRequest(BaseModel):
-    """Request body for creating a new AI influencer."""
+    """Request body for creating a new AI influencer.
+
+    NAME NORMALISATION:
+    The mobile app's auto-username generator
+    (yral-mobile/.../UsernameUtils.kt:generateUsernameFromPrincipal)
+    concatenates TitleCase words from a noun + adjective list and never
+    lowercases the result. That produced names like "ActivityUniv295"
+    that failed our `^[a-z0-9_-]+$` pattern and 422'd every create call
+    on every existing app build in the wild. We lowercase the inbound
+    `name` BEFORE the pattern check so the server tolerates both
+    title-cased generated names and any legacy clients still in use.
+    The mobile is being patched in parallel; this server-side normaliser
+    keeps users unblocked across all app versions, today and forever.
+    """
+    # `name` is the influencer's URL-safe slug. Pattern stays strict on
+    # what we STORE (lowercase only) — the validator below normalises
+    # what we ACCEPT so mobile clients sending mixed case still succeed.
     name: str = Field(min_length=3, max_length=50, pattern=r'^[a-z0-9_-]+$')
     display_name: str = Field(min_length=1, max_length=255)
     system_instructions: str = Field(min_length=10, max_length=10000)
@@ -97,6 +113,20 @@ class CreateInfluencerRequest(BaseModel):
     is_nsfw: bool = False
     source: Optional[str] = None
     metadata: Optional[dict] = None
+
+    # `mode='before'` runs BEFORE the `pattern=` constraint above. So we
+    # lowercase first, and the existing strict lowercase regex then
+    # validates the normalised value. Net effect: an inbound name like
+    # "ActivityUniv295" becomes "activityuniv295", passes validation,
+    # and is what we hand to the uniqueness check + the DB insert.
+    @field_validator('name', mode='before')
+    @classmethod
+    def lowercase_name(cls, v):
+        # Only normalise actual strings — leave non-string inputs alone
+        # so Pydantic still emits its standard "string_type" error for them.
+        if isinstance(v, str):
+            return v.lower()
+        return v
 
 
 class GeneratePromptRequest(BaseModel):
