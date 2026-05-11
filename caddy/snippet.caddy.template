@@ -85,12 +85,15 @@ ${PROJECT_DOMAIN} {
         Permissions-Policy "geolocation=(), microphone=(), camera=()"
         # Strict CSP for an API service. If your service ever serves HTML,
         # tighten / loosen this per route — never default it to 'unsafe-*'.
-        Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+        # `?` prefix = "set if not already set" — lets path-scoped header
+        # blocks below (e.g. @openapi_docs for Swagger UI / ReDoc) override
+        # without being overwritten when this deferred block fires.
+        ?Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
         # Cross-origin isolation (browser hardening). Safe defaults for an
         # API that does NOT need to be embedded as a worker by other origins.
         Cross-Origin-Opener-Policy "same-origin"
-        Cross-Origin-Embedder-Policy "require-corp"
-        Cross-Origin-Resource-Policy "same-origin"
+        ?Cross-Origin-Embedder-Policy "require-corp"
+        ?Cross-Origin-Resource-Policy "same-origin"
         # Don't cache anything by default — this is an API, not a CDN.
         # Per-route Cache-Control can override this from the app.
         Cache-Control "no-store"
@@ -106,11 +109,16 @@ ${PROJECT_DOMAIN} {
     # endpoint still gets the locked-down default policy above.
     # Also relax COEP, since CDN assets don't send Cross-Origin-Resource-Policy
     # and require-corp would block them.
+    # The global `header {…}` block above marks CSP/COEP/CORP with `?` (set-if-unset)
+    # specifically so this block can pre-set them with `>` (replace). Order: this
+    # scoped route is route[0] (matchers sort earlier); global is route[1]. This block
+    # fires first and sets the relaxed values; the global block then runs and its `?`
+    # CSP/COEP/CORP become no-ops because the values are already set.
     @openapi_docs path /docs /docs/* /redoc /redoc/*
     header @openapi_docs {
-        Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https://fastapi.tiangolo.com https://cdn.jsdelivr.net; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'"
-        Cross-Origin-Embedder-Policy "unsafe-none"
-        Cross-Origin-Resource-Policy "cross-origin"
+        >Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https://fastapi.tiangolo.com https://cdn.jsdelivr.net; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'"
+        >Cross-Origin-Embedder-Policy "unsafe-none"
+        >Cross-Origin-Resource-Policy "cross-origin"
     }
 
     # ----- Rate limiting (REQUIRED before public traffic — see SECURITY.md) -----
