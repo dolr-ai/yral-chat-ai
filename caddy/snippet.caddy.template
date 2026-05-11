@@ -98,6 +98,21 @@ ${PROJECT_DOMAIN} {
         -Server
     }
 
+    # ----- Relaxed CSP for OpenAPI docs (Swagger UI + ReDoc) -----
+    # /docs (Swagger UI) and /redoc (ReDoc) are interactive HTML pages that
+    # FastAPI generates from a small bootstrap HTML + assets loaded from
+    # cdn.jsdelivr.net. The strict default-src 'none' CSP above blocks them.
+    # Scope the relaxation TIGHTLY to these two paths — every real API
+    # endpoint still gets the locked-down default policy above.
+    # Also relax COEP, since CDN assets don't send Cross-Origin-Resource-Policy
+    # and require-corp would block them.
+    @openapi_docs path /docs /docs/* /redoc /redoc/*
+    header @openapi_docs {
+        Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https://fastapi.tiangolo.com https://cdn.jsdelivr.net; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'"
+        Cross-Origin-Embedder-Policy "unsafe-none"
+        Cross-Origin-Resource-Policy "cross-origin"
+    }
+
     # ----- Rate limiting (REQUIRED before public traffic — see SECURITY.md) -----
     # Caddy needs the rate-limit plugin built in. The official caddy:2-alpine
     # image does NOT include it. To enable: build a custom Caddy with

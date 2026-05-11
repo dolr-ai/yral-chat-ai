@@ -207,3 +207,19 @@ on every yral-chat-ai deployment, including production.
 
 **Revisit:** at higher scale (≥10× current traffic) or before a formal
 external security review, whichever comes first.
+
+**Follow-up landed same day (2026-05-11):** the strict
+`Content-Security-Policy: default-src 'none'` and
+`Cross-Origin-Embedder-Policy: require-corp` headers from
+`caddy/snippet.caddy.template` blocked the Swagger UI and ReDoc HTML
+shells in browsers (curl returned 200 without enforcing CSP, so the
+initial verification missed it). Fix: a path-scoped Caddy `header @openapi_docs`
+block tightly limited to `/docs`, `/docs/*`, `/redoc`, `/redoc/*` that
+allows `cdn.jsdelivr.net` (Swagger UI + ReDoc bundles),
+`fonts.googleapis.com` / `fonts.gstatic.com` (ReDoc fonts),
+`fastapi.tiangolo.com` (favicon), inline scripts/styles, and relaxes COEP
+to `unsafe-none` + CORP to `cross-origin`. **Every other endpoint —
+every real API route — still receives the original strict policy.**
+Self-hosting the Swagger UI / ReDoc assets (to keep the strict CSP
+everywhere) is a tracked follow-up; depends on adding a Dockerfile
+step to fetch the bundles at build time.
