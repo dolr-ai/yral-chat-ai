@@ -203,18 +203,26 @@ async def _trending_stats_refresher():
 # ---------------------------------------------------------------------------
 # This is the "app" variable that uvicorn looks for.
 # lifespan=lifespan tells FastAPI to run our startup/shutdown logic.
-# Disable FastAPI's auto-exposed API docs (/docs, /redoc, /openapi.json).
-# These leak internal route shapes, request/response schemas, and admin
-# endpoints to any unauthenticated caller. The old Rust service hid these;
-# we match that behavior. Mobile clients and integrations already know the
-# contract — OpenAPI is only useful during development.
+#
+# WHY THE STANDARD DOC ENDPOINTS ARE ENABLED:
+#   /docs (Swagger UI), /redoc (ReDoc), and /openapi.json are exposed
+#   publicly so the team, integrators, and the mobile SDK can discover
+#   the API surface without reading source code. CTO sign-off on
+#   2026-05-11: security is enforced at the endpoint level (JWT auth,
+#   admin-key, CORS, body-size caps, Trivy CVE gate), not by hiding
+#   the route map. A formal security review will revisit this when
+#   scale warrants.
 app = FastAPI(
     title=config.APP_NAME,
     version=config.APP_VERSION,
+    description=(
+        "yral-chat-ai — AI influencer chat backend. "
+        "Endpoints are grouped by feature area (Health, Chat v1/v2/v3, "
+        "Human Chat, Influencers, Media, WebSocket). "
+        "Most endpoints require a Bearer JWT in the Authorization header. "
+        "Admin endpoints require X-Admin-Key. WebSocket auth uses ?token=…"
+    ),
     lifespan=lifespan,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
 )
 
 
@@ -321,16 +329,11 @@ async def sentry_capture_validation_error(request: Request, exc: RequestValidati
 # AUTH TEST ENDPOINT
 # ---------------------------------------------------------------------------
 
-@app.get("/api/v1/auth/me")
+@app.get("/api/v1/auth/me", tags=["Auth"])
 async def auth_me(request: Request):
     """Test endpoint to verify JWT authentication is working."""
     user_id = get_current_user(request)
     return {"user_id": user_id}
-
-
-# /debug/routes endpoint REMOVED — it was exposing all API routes publicly.
-# Use `curl https://chat-ai.rishi.yral.com/openapi.json` for API docs instead
-# (FastAPI's built-in OpenAPI spec, which is standard practice).
 
 
 # ---------------------------------------------------------------------------

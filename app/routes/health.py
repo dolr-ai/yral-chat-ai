@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 import database
 import config
 
-router = APIRouter()
+router = APIRouter(tags=["Health"])
 
 
 @router.get("/")

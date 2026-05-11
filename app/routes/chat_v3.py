@@ -33,7 +33,7 @@ from repositories import conversation_repo, message_repo
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v3/chat")
+router = APIRouter(prefix="/api/v3/chat", tags=["Chat v3 — Unified inbox"])
 
 
 def _format_dt(dt) -> str:

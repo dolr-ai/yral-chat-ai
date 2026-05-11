@@ -43,7 +43,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v2/chat")
+router = APIRouter(prefix="/api/v2/chat", tags=["Chat v2 — Bot-aware"])
 
 
 # ---------------------------------------------------------------------------

@@ -141,7 +141,10 @@ Track them so they don't drift.
 ## Active hardening already in place (as of 2026-04-08)
 
 - App container runs as **non-root `appuser`** (UID 1001) — see `Dockerfile`
-- **No public debug endpoints** — `/sentry-test` removed
+- **No public debug endpoints** — `/sentry-test` removed. OpenAPI docs
+  (`/docs`, `/redoc`, `/openapi.json`) are intentionally public per the
+  2026-05-11 decision below; they describe the API surface but do not
+  weaken any individual endpoint's auth checks.
 - **Trivy CRITICAL CVEs fail the build** — Trivy step in CI uses `exit-code: "1"` for CRITICAL
 - **Caddy request body limit** — `request_body { max_size 100MB }` in `caddy/snippet.caddy.template` (sized for occasional audio/video uploads while still blocking the trivial 1 GB POST attack)
 - **Strict Content-Security-Policy** — `default-src 'none'; frame-ancestors 'none'` baked into the snippet
@@ -168,3 +171,39 @@ should hold up:
 | Reflected XSS via JSON response | CSP blocks any inline script even if injected | `default-src 'none'` |
 | Stack traces leaked on 5xx | FastAPI returns generic JSON, no traceback | FastAPI default behavior |
 | Anonymous Postgres connect from internet | refused at TCP layer | DB only on `db-internal` overlay, no published port |
+
+## Decision log
+
+### 2026-05-11 — Public OpenAPI docs
+
+**Decision:** `/docs`, `/redoc`, and `/openapi.json` are exposed publicly
+on every yral-chat-ai deployment, including production.
+
+**Approved by:** CTO Saikat (verbal sign-off, 2026-05-11).
+
+**Rationale:**
+- Hiding the route map ("security through obscurity") is a weak control
+  on its own and obstructs legitimate users — the team, integrators,
+  the mobile SDK, future Codex review, onboarding engineers.
+- Endpoint-level controls (JWT auth, `X-Admin-Key` constant-time check,
+  CORS, Caddy body-size cap, security headers, Trivy CVE gate) are the
+  actual locks. Their strength does not depend on the docs being hidden.
+- Aligns with the FastAPI ecosystem default; matches industry practice
+  for similarly-sized internal APIs.
+
+**Follow-ups (not blockers; tracked here so they don't drift):**
+1. JWT signature validation is intentionally skipped today (matches
+   Ravi's old Rust service). v2 plan implements JWKS-based strict
+   validation with a 7-day shadow rollout. Public docs make this gap
+   more discoverable; prioritise the v2 rollout once feature parity
+   work allows.
+2. No rate limiting on the most expensive endpoints
+   (`POST /api/v1/chat/conversations/{id}/images`,
+   `POST /api/v1/influencers/create`). A determined attacker with a
+   valid (or forged) JWT could burn the Replicate / Gemini budget.
+   Mitigation depends on the deferred `caddy-ratelimit` plugin work
+   above (Deferred TODO #1) plus per-route token-bucket limits in app
+   code.
+
+**Revisit:** at higher scale (≥10× current traffic) or before a formal
+external security review, whichever comes first.

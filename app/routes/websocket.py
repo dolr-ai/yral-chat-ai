@@ -31,7 +31,7 @@ from services import websocket_manager
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/chat")
+router = APIRouter(prefix="/api/v1/chat", tags=["WebSocket"])
 
 
 @router.websocket("/ws/inbox/{user_id}")

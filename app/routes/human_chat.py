@@ -42,7 +42,7 @@ from services import websocket_manager, push_notifications
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/chat/human")
+router = APIRouter(prefix="/api/v1/chat/human", tags=["Human Chat"])
 
 
 # ---------------------------------------------------------------------------

@@ -145,7 +145,9 @@ backward-compatible with the currently-running code (expand-contract pattern).
 - gitleaks on every push
 - Dependabot weekly scans (pip + Docker + Actions)
 - `.bootstrap-secrets/` permanently gitignored
-- No public debug endpoints
+- OpenAPI docs (`/docs`, `/redoc`, `/openapi.json`) are public by design;
+  security is enforced per-endpoint (JWT, admin-key, CORS, body cap).
+  Decision: CTO sign-off 2026-05-11. Revisit at higher scale.
 
 See `SECURITY.md` for the full threat model + deferred TODOs.
 See `RUNBOOK.md` for step-by-step incident playbooks (leader failover, replica

@@ -52,7 +52,7 @@ from models import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/chat")
+router = APIRouter(prefix="/api/v1/chat", tags=["Chat v1 — AI"])
 
 
 # ---------------------------------------------------------------------------
