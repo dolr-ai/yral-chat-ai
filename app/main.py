@@ -30,6 +30,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.openapi.utils import get_openapi
 
 import database
 from auth import get_current_user
@@ -223,7 +225,134 @@ app = FastAPI(
         "Admin endpoints require X-Admin-Key. WebSocket auth uses ?token=…"
     ),
     lifespan=lifespan,
+    # Disable FastAPI's auto Swagger UI / ReDoc HTML routes so we can serve
+    # custom routes below with pinned bundle versions, persistAuthorization,
+    # and a non-floating CDN tag. /openapi.json stays at the default URL.
+    docs_url=None,
+    redoc_url=None,
 )
+
+
+# ---------------------------------------------------------------------------
+# CUSTOM OPENAPI SCHEMA (adds Authorize button + security metadata)
+# ---------------------------------------------------------------------------
+# FastAPI's default OpenAPI schema does not include securitySchemes because
+# our route handlers extract the JWT manually inside the body (via
+# get_current_user) rather than through a FastAPI Security() dependency.
+# Without securitySchemes the Swagger UI "Authorize" button never appears,
+# every endpoint looks unauthenticated, and "Try it out" requires pasting
+# the Authorization header into every single request — fine for a personal
+# project, embarrassing when a colleague opens the page.
+#
+# This override injects two schemes (BearerAuth + AdminKey) and annotates
+# every operation with the right one so the lock icon renders and a single
+# "Authorize" click unlocks every endpoint.
+def _build_custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    # Tag ordering + descriptions: Swagger UI renders tags in the order they
+    # appear here, top to bottom of the sidebar.
+    schema["tags"] = [
+        {"name": "Health", "description": "Service health checks and readiness probes — used by Docker, CI, and Caddy upstream health probing."},
+        {"name": "Auth", "description": "JWT verification helpers."},
+        {"name": "Chat v1 — AI", "description": "Core AI conversation endpoints: create/list conversations, send messages, generate images, mark-as-read, delete."},
+        {"name": "Chat v2 — Bot-aware", "description": "Conversation listing that distinguishes user-view vs bot-view (powers the Chat-as-Human feature)."},
+        {"name": "Chat v3 — Unified inbox", "description": "Unified AI + human-to-human conversation inbox sorted by recency."},
+        {"name": "Human Chat", "description": "Direct human-to-human messaging — no AI in the loop."},
+        {"name": "Influencers", "description": "AI influencer CRUD, prompt + metadata generation, video-prompt generation, and admin moderation (ban / unban)."},
+        {"name": "Media", "description": "Image and audio uploads to S3 (multipart/form-data). Returns presigned URL + storage key."},
+        {"name": "WebSocket", "description": "Real-time inbox events. The WebSocket endpoint itself does not appear in OpenAPI (spec is HTTP-only); this section documents the event schemas via GET /api/v1/chat/ws/docs."},
+    ]
+    schema.setdefault("components", {})["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": (
+                "YRAL JWT — paste only the token (no `Bearer ` prefix). "
+                "Valid issuers: `https://auth.yral.com`, `https://auth.dolr.ai`. "
+                "Signature is not currently verified (matches the production "
+                "behaviour of the prior Rust service); strict verification is "
+                "planned for v2."
+            ),
+        },
+        "AdminKey": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Admin-Key",
+            "description": (
+                "Admin key — required only for `/api/v1/admin/*` endpoints. "
+                "Constant-time compared against ADMIN_KEY. Never share."
+            ),
+        },
+    }
+    # Annotate every operation with its security requirement.
+    public_paths = {"/", "/health", "/status"}
+    for path, ops in schema.get("paths", {}).items():
+        for method, op in ops.items():
+            if not isinstance(op, dict) or method.upper() not in {"GET", "POST", "PATCH", "PUT", "DELETE"}:
+                continue
+            if path in public_paths:
+                op["security"] = []
+            elif path.startswith("/api/v1/admin/"):
+                op["security"] = [{"AdminKey": []}]
+            else:
+                op["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _build_custom_openapi
+
+
+# ---------------------------------------------------------------------------
+# CUSTOM /docs (Swagger UI) and /redoc (ReDoc) WITH PINNED BUNDLES
+# ---------------------------------------------------------------------------
+# Pin to specific major versions so a CDN-side release of an experimental
+# tag doesn't silently break the docs page. `redoc@next` (FastAPI's
+# default) is a floating tag and has bitten us once already.
+SWAGGER_UI_VERSION = "5.17.14"
+REDOC_VERSION = "2.1.5"
+
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    """Custom Swagger UI with pinned bundle + auth UX tweaks."""
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} — Swagger UI",
+        swagger_js_url=f"https://cdn.jsdelivr.net/npm/swagger-ui-dist@{SWAGGER_UI_VERSION}/swagger-ui-bundle.js",
+        swagger_css_url=f"https://cdn.jsdelivr.net/npm/swagger-ui-dist@{SWAGGER_UI_VERSION}/swagger-ui.css",
+        swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
+        swagger_ui_parameters={
+            "persistAuthorization": True,
+            "displayRequestDuration": True,
+            "defaultModelsExpandDepth": -1,
+            "deepLinking": True,
+            "tryItOutEnabled": True,
+            "filter": True,
+            "docExpansion": "list",
+            "syntaxHighlight.theme": "monokai",
+        },
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def custom_redoc_html():
+    """Custom ReDoc with pinned bundle version (not the floating @next tag)."""
+    return get_redoc_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} — ReDoc",
+        redoc_js_url=f"https://cdn.jsdelivr.net/npm/redoc@{REDOC_VERSION}/bundles/redoc.standalone.js",
+        redoc_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
+        with_google_fonts=True,
+    )
 
 
 # ---------------------------------------------------------------------------
