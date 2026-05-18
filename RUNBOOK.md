@@ -227,6 +227,35 @@ The deploy-app.sh script validates Caddy config before AND after swapping
 snippets. If a bad snippet is deployed, it's automatically removed. Caddy
 crashes are most likely caused by manual edits to the Caddyfile.
 
+**Reboot survivability** (since 2026-05-18): two complementary safeguards
+keep Caddy up across the cluster's monthly maintenance reboots.
+
+- `restart: always` in the rendered compose (`caddy/render-caddy-compose.sh`)
+  — Caddy comes back after crashes, daemon restarts, and reboots, even if
+  the daemon was stopped while Caddy was in an exited state. Strictly
+  better than the prior `unless-stopped` policy.
+- `@reboot` crontab entry in the deploy user — on every boot, after a
+  30-second settle, runs `cd /home/deploy/caddy && docker compose up -d`.
+  This covers the one case `restart: always` cannot: someone ran
+  `docker compose down` (container removed, not just stopped) before the
+  reboot.
+
+Why both: the 2026-05-18 incident showed that something on rishi-2/rishi-3
+stops Caddy 10–15 minutes BEFORE Saikat's reboot (apt-bouncing dockerd,
+maintenance script, opaque). The old `unless-stopped` policy treats that
+as user intent and refuses to bring Caddy back on the next boot, so 2/3
+of Cloudflare probes fell through and surfaced as 521. With both
+safeguards in place, Caddy returns within ~30s of any reboot.
+
+Install / re-install (run from operator's Mac):
+```bash
+bash scripts/bootstrap-caddy-autostart.sh
+```
+Idempotent. Verify on a host with `crontab -l` and
+`docker inspect caddy --format '{{.HostConfig.RestartPolicy.Name}}'`
+(should print `always`). Cron runtime log:
+`tail -f /home/deploy/caddy-autostart.log`.
+
 ---
 
 ## 4. etcd Cluster Degraded

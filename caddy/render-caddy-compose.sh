@@ -97,7 +97,7 @@ services:
   caddy:
     image: caddy:2-alpine
     container_name: caddy
-    restart: unless-stopped
+    restart: always
     ports:
       - "80:80"
       - "443:443"
